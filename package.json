@@ -15,6 +15,7 @@
     "smoke": "node scripts/smoke.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1152.0",
     "@aws-sdk/client-sesv2": "^3.908.0",
     "@aws-sdk/client-sqs": "^3.1152.0",
     "box-node-sdk": "^10.18.0",

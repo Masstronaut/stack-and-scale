@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { SQSEvent, SQSHandler } from "aws-lambda";
 import { Effect } from "effect";
-import type { PipelineJob, RelatedDocumentsJob, SalesNotesJob } from "../src/jobs/messages.ts";
+import type {
+  PipelineJob,
+  RelatedDocumentsJob,
+  SalesNotesJob,
+  SalesSlidesJob,
+} from "../src/jobs/messages.ts";
+import { ArtifactsServiceLive } from "../src/services/artifacts-live.ts";
+import { ArtifactsService, type ArtifactsServiceShape } from "../src/services/artifacts.ts";
 import { BoxService, type BoxServiceShape, type FileRef } from "../src/services/box.ts";
 import { BoxError, LlmError } from "../src/services/errors.ts";
 import { JobQueueService, type JobQueueServiceShape } from "../src/services/jobs.ts";
@@ -35,15 +42,6 @@ const sqsEvent = (...bodies: string[]): SQSEvent => ({
 
 const run = async (handler: SQSHandler, ...bodies: string[]) =>
   handler(sqsEvent(...bodies), {} as never);
-
-const runOk = async (
-  handler: SQSHandler,
-  ...bodies: string[]
-): Promise<{ batchItemFailures: { itemIdentifier: string }[] }> => {
-  const result = await run(handler, ...bodies);
-  expect(result.batchItemFailures).toEqual([]);
-  return result;
-};
 
 const CLASSIFY_PREFIX = "Is the following document";
 
@@ -327,6 +325,35 @@ const runNotes = (
         Effect.provideService(BoxService, box),
         Effect.provideService(LlmService, llm),
         Effect.provideService(JobQueueService, queues),
+      ),
+  );
+
+const makeArtifactsFake = () => {
+  const puts: { key: string; content: string | Uint8Array; contentType: string }[] = [];
+  const artifacts: ArtifactsServiceShape = {
+    putArtifact: (key, content, contentType) =>
+      Effect.sync(() => {
+        puts.push({ key, content, contentType });
+        return { key, bucket: "fake-bucket" };
+      }),
+  };
+  return { artifacts, puts };
+};
+
+const runSlides = (
+  job: SalesSlidesJob,
+  box: BoxServiceShape,
+  llm: LlmServiceShape,
+  artifacts: ArtifactsServiceShape,
+  boxManifest: BoxManifest = relatedManifest,
+) =>
+  Effect.runPromise(
+    salesSlides
+      .processJob(job, boxManifest)
+      .pipe(
+        Effect.provideService(BoxService, box),
+        Effect.provideService(LlmService, llm),
+        Effect.provideService(ArtifactsService, artifacts),
       ),
   );
 
@@ -779,15 +806,144 @@ describe("workers", () => {
     });
   });
 
-  it("sales slides completes a job (#5)", async () => {
-    await runOk(
+  const SLIDES_JOB: SalesSlidesJob = {
+    contractFileId: "agr-1",
+    relevantDocumentIds: RELATED_BASELINE_IDS,
+    salesNotesFileId: "uploaded-Sales Notes Acme.md",
+  };
+
+  it("builds the deck from notes + context, uploads it and writes the artifact (#5)", async () => {
+    await withEnv({ BOX_WRITE_ENABLED: "true" }, async () => {
+      const { box, uploads } = makeBoxFake({ files: [] });
+      const { llm, calls } = makeRelatedLlmFake({
+        reply:
+          '<!DOCTYPE html><html><head><style>.slide{page-break-after:always}</style></head><body><section class="slide"><h2>Acme renewal</h2></section><section class="slide"><h2>Value realized [USAGE: D1-USAGE.pdf]</h2></section><section class="slide"><h2>Next steps</h2></section></body></html>',
+      });
+      const { artifacts, puts } = makeArtifactsFake();
+
+      const result = await runSlides(SLIDES_JOB, box, llm, artifacts);
+
+      expect(calls).toHaveLength(1); // one deck prompt
+      expect(calls[0]).toContain("Acme"); // customer context
+      expect(calls[0]).toContain("SALES NOTES"); // notes are the primary source
+      expect(calls[0]).toContain("text of uploaded-Sales Notes Acme.md"); // notes text read via box
+      expect(calls[0]).toContain("AGREEMENT: D1-AGREEMENT.pdf"); // labeled primary contract
+      expect(calls[0]).toContain("text of usage-1"); // usage evidence included
+      expect(uploads).toHaveLength(1);
+      expect(uploads[0]!.name).toBe("Sales Deck Acme.html");
+      expect(uploads[0]!.content).toContain("<section");
+      expect(puts).toHaveLength(1);
+      expect(puts[0]!.key).toBe("artifacts/agr-1/sales-deck.html");
+      expect(puts[0]!.contentType).toBe("text/html");
+      expect(puts[0]!.content).toContain("<section");
+      expect(result.deckFileName).toBe("Sales Deck Acme.html");
+      expect(result.deckFileId).toBe("uploaded-Sales Deck Acme.html");
+      expect(result.artifactKey).toBe("artifacts/agr-1/sales-deck.html");
+      expect(result.artifactBucket).toBe("fake-bucket");
+      expect(result.slides).toBe(3);
+    });
+  });
+
+  it("derives talking points without notes when salesNotesFileId is empty (#5)", async () => {
+    await withEnv({ BOX_WRITE_ENABLED: "true" }, async () => {
+      const { box, uploads } = makeBoxFake({ files: [] });
+      const { llm, calls } = makeRelatedLlmFake({
+        reply:
+          '<!DOCTYPE html><html><body><section class="slide"><h2>Title</h2></section></body></html>',
+      });
+      const { artifacts, puts } = makeArtifactsFake();
+
+      const result = await runSlides({ ...SLIDES_JOB, salesNotesFileId: "" }, box, llm, artifacts);
+
+      expect(calls).toHaveLength(1); // deck is still drafted
+      expect(calls[0]).not.toContain("SALES NOTES"); // degraded prompt has no notes section
+      expect(calls[0]).toContain("text of agr-1"); // grounded in contract + docs
+      expect(calls[0]).toContain("text of ucsv-1");
+      expect(result.deckFileName).toBe("Sales Deck Acme.html");
+      expect(uploads).toHaveLength(1);
+      expect(puts).toHaveLength(1);
+    });
+  });
+
+  it("skips the box upload when the write gate is off but still writes the artifact (#5)", async () => {
+    await withEnv({ BOX_WRITE_ENABLED: undefined }, async () => {
+      const { box, uploads } = makeBoxFake({ files: [] });
+      const { llm, calls } = makeRelatedLlmFake({
+        reply:
+          '<!DOCTYPE html><html><body><section class="slide"><h2>Title</h2></section></body></html>',
+      });
+      const { artifacts, puts } = makeArtifactsFake();
+
+      const result = await runSlides(SLIDES_JOB, box, llm, artifacts);
+
+      expect(calls).toHaveLength(1); // deck is still drafted
+      expect(uploads).toEqual([]); // box gate off
+      expect(result.deckFileId).toBe("");
+      expect(puts).toHaveLength(1); // artifact gate is independent
+      expect(result.artifactKey).toBe("artifacts/agr-1/sales-deck.html");
+    });
+  });
+
+  it("skips artifact writes when ARTIFACTS_BUCKET is unset (#5)", async () => {
+    await withEnv({ ARTIFACTS_BUCKET: undefined }, async () => {
+      const ref = await Effect.runPromise(
+        ArtifactsServiceLive.putArtifact(
+          "artifacts/agr-1/sales-deck.html",
+          "<!DOCTYPE html><html></html>",
+          "text/html",
+        ),
+      );
+
+      expect(ref).toEqual({ key: "artifacts/agr-1/sales-deck.html", bucket: "" });
+    });
+  });
+
+  it("fails the job when the deck LLM call fails (#5)", async () => {
+    const { box, uploads } = makeBoxFake({ files: [] });
+    const { llm } = makeRelatedLlmFake({ fail: true });
+    const { artifacts, puts } = makeArtifactsFake();
+
+    await expect(runSlides(SLIDES_JOB, box, llm, artifacts)).rejects.toMatchObject({
+      _tag: "LlmError",
+    });
+    expect(uploads).toEqual([]);
+    expect(puts).toEqual([]);
+  });
+
+  it("fails the job for unresolvable contractFileIds (#5)", async () => {
+    const { box } = makeBoxFake({ files: [] });
+    const { llm } = makeRelatedLlmFake();
+    const { artifacts, puts } = makeArtifactsFake();
+
+    await expect(
+      runSlides(
+        { contractFileId: "unknown-file", relevantDocumentIds: [], salesNotesFileId: "" },
+        box,
+        llm,
+        artifacts,
+      ),
+    ).rejects.toMatchObject({ _tag: "ContractResolutionError", contractFileId: "unknown-file" });
+    // shared docs are customer-less and cannot be resolved as contracts
+    await expect(
+      runSlides(
+        { contractFileId: "cat-1", relevantDocumentIds: [], salesNotesFileId: "" },
+        box,
+        llm,
+        artifacts,
+      ),
+    ).rejects.toMatchObject({ _tag: "ContractResolutionError" });
+    expect(puts).toEqual([]);
+
+    // through the live handler the failure becomes a batch item failure
+    const result = await run(
       salesSlides.handler,
       JSON.stringify({
-        contractFileId: "contract-1",
-        relevantDocumentIds: ["doc-1", "doc-2"],
-        salesNotesFileId: "notes-1",
+        contractFileId: "unknown-file",
+        relevantDocumentIds: [],
+        salesNotesFileId: "",
       }),
     );
+    expect(result.batchItemFailures).toEqual([{ itemIdentifier: "msg-0" }]);
   });
 
   it("routes malformed messages to the dead-letter path instead of crashing", async () => {
