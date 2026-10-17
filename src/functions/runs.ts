@@ -73,10 +73,13 @@ export const listRuns = async (): Promise<readonly RunSummary[]> => {
       .map((record) => record.finishedAt)
       .filter((finishedAt): finishedAt is string => finishedAt !== undefined)
       .sort();
+    const anyRunning = ordered.some((record) => record.status === "running");
     return {
       runId,
       startedAt: ordered[0]?.startedAt ?? "",
-      finishedAt: finished.at(-1),
+      // A run is only finished once no stage is still running; the final
+      // stage writes its "running" record before any of this is observable.
+      finishedAt: anyRunning ? undefined : finished.at(-1),
       stages: ordered,
     };
   });
