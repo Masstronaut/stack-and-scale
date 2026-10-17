@@ -1,0 +1,64 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  IAM role that GitHub Actions assumes via OIDC to deploy stack-and-scale
+  with SST. One-time bootstrap.
+
+Parameters:
+  GithubOrg:
+    Type: String
+    Default: Masstronaut
+    Description: GitHub organization or user that owns the repository.
+  GithubRepo:
+    Type: String
+    Default: stack-and-scale
+    Description: Repository name allowed to assume the deploy role.
+  GithubOidcProviderArn:
+    Type: String
+    Default: ""
+    Description: >
+      ARN of an existing GitHub OIDC provider. Leave empty to create one.
+
+Conditions:
+  CreateOidcProvider: !Equals [!Ref GithubOidcProviderArn, ""]
+
+Resources:
+  GithubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${GithubRepo}-github-deploy"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRoleWithWebIdentity
+            Principal:
+              Federated: !If
+                - CreateOidcProvider
+                - !Ref GithubOidcProvider
+                - !Ref GithubOidcProviderArn
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  - !Sub repo:${GithubOrg}/${GithubRepo}:ref:refs/heads/main
+                  - !Sub repo:${GithubOrg}/${GithubRepo}:environment:production
+      ManagedPolicyArns:
+        # SST bootstrap + deploys create IAM roles/policies for the resources
+        # it manages (Lambda execution roles, state bucket, SSM secrets, ...).
+        # Start with admin for convenience and scope down once the resource
+        # set stabilizes.
+        - arn:aws:iam::aws:policy/AdministratorAccess
+
+Outputs:
+  RoleArn:
+    Description: Set this as the AWS_DEPLOY_ROLE_ARN repository variable.
+    Value: !GetAtt DeployRole.Arn

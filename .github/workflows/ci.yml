@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Vite+ (node, package manager, deps)
+        uses: voidzero-dev/setup-vp@v1.21.2
+        with:
+          node-version: "24"
+          cache: true
+
+      - name: Generate SST platform types
+        run: npx sst install
+        env:
+          SST_STAGE: ci
+
+      - name: Lint, format and typecheck
+        run: vp check
+
+      - name: Test
+        run: vp test

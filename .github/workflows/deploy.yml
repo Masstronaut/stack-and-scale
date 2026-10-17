@@ -1,0 +1,65 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "SST stage to deploy"
+        default: "production"
+        type: string
+
+permissions:
+  id-token: write # OIDC federation with AWS
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.stage || 'production' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      STAGE: ${{ inputs.stage || 'production' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Vite+ (node, package manager, deps)
+        uses: voidzero-dev/setup-vp@v1.21.2
+        with:
+          node-version: "24"
+          cache: true
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Generate SST platform types
+        run: npx sst install
+        env:
+          SST_STAGE: ${{ env.STAGE }}
+
+      - name: Deploy
+        run: npx sst deploy --stage "$STAGE"
+        env:
+          SES_SENDER_EMAIL: ${{ vars.SES_SENDER_EMAIL }}
+
+      - name: Smoke test health endpoint
+        run: |
+          set -euo pipefail
+          url="${{ vars.HEALTH_CHECK_URL }}"
+          if [ -z "$url" ]; then
+            echo "vars.HEALTH_CHECK_URL not set; extracting from stack state"
+            npx sst state export --stage "$STAGE" > /tmp/state.json
+            url="$(jq -r '[recurse | objects | select(has("healthCheckUrl")) | .healthCheckUrl] | map(if type == "string" then . elif type == "object" then (.value // empty) else empty end) | .[0] // empty' /tmp/state.json)"
+          fi
+          if [ -z "$url" ]; then
+            echo "::warning::could not resolve health check URL; set vars.HEALTH_CHECK_URL to verify explicitly"
+            exit 0
+          fi
+          npm run smoke -- "$url"

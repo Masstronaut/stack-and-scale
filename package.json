@@ -1,0 +1,31 @@
+{
+  "name": "stack-and-scale",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SST + AWS job pipeline: SQS queue, SES email, Box file pulls, API Gateway health check",
+  "type": "module",
+  "scripts": {
+    "dev": "sst dev",
+    "server": "node --env-file=.env src/server.ts",
+    "check": "vp check",
+    "test": "vp test",
+    "deploy": "sst deploy",
+    "smoke": "node scripts/smoke.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sesv2": "^3.908.0",
+    "box-node-sdk": "^10.18.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.149",
+    "@types/node": "^24.7.0",
+    "sst": "^4.17.2",
+    "vite-plus": "^1.3.0"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "^24.11.0"
+    }
+  }
+}
