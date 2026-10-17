@@ -15,12 +15,12 @@ This handoff is an index, not a copy of the dataset. Box remains the document so
 - [Worker retrieval guidance](WORKERS.md)
 - [Secure Box CCG through SST](SST-BOX.md)
 
-| Library area | Box folder |
-| --- | --- |
-| S&S Contracts | [428345012662](https://app.box.com/folder/428345012662) |
-| Customer packs | [428366013503](https://app.box.com/folder/428366013503) |
+| Library area             | Box folder                                              |
+| ------------------------ | ------------------------------------------------------- |
+| S&S Contracts            | [428345012662](https://app.box.com/folder/428345012662) |
+| Customer packs           | [428366013503](https://app.box.com/folder/428366013503) |
 | Shared Product Knowledge | [428365191869](https://app.box.com/folder/428365191869) |
-| Original CUAD contracts | [428383009842](https://app.box.com/folder/428383009842) |
+| Original CUAD contracts  | [428383009842](https://app.box.com/folder/428383009842) |
 
 Links are authenticated Box UI links, not public shares or download URLs. Knowing an ID does not grant access. Retrieve content through the authenticated server-side SDK; do not HTTP-fetch the UI link as file content. IDs are strings. File IDs survive version updates; `verified_box_version_id` records the approved snapshot, not a promise that Box will never change. Check version before a reproducible run and report drift instead of silently using new content.
 
@@ -28,16 +28,16 @@ Links are authenticated Box UI links, not public shares or download URLs. Knowin
 
 Every customer has exactly these eight supporting files:
 
-| Manifest type | Filename | Purpose |
-| --- | --- | --- |
-| PROFILE | Customer Profile (s).pdf | Fictional identity, contacts and scope |
-| AGREEMENT | Renewal Agreement (s).pdf | Self-contained fictional renewal terms and entitlements |
-| EMAILS | Customer Email History (s).pdf | Dated customer correspondence |
-| REQUESTS | Feature Requests (s).pdf | Requests and status, not purchase commitments |
-| HISTORY | Account & Negotiation History (s).pdf | Internal commercial context and open items |
-| USAGECSV | Product Usage (s).csv | Synthetic observations with units, periods and designation |
-| USAGE | Product Usage Report (s).pdf | Usage interpretation and calculations |
-| OBLIGATIONS | Deliverables & Service Performance (s).pdf | Promised, delivered, pending and overdue work |
+| Manifest type | Filename                                   | Purpose                                                    |
+| ------------- | ------------------------------------------ | ---------------------------------------------------------- |
+| PROFILE       | Customer Profile (s).pdf                   | Fictional identity, contacts and scope                     |
+| AGREEMENT     | Renewal Agreement (s).pdf                  | Self-contained fictional renewal terms and entitlements    |
+| EMAILS        | Customer Email History (s).pdf             | Dated customer correspondence                              |
+| REQUESTS      | Feature Requests (s).pdf                   | Requests and status, not purchase commitments              |
+| HISTORY       | Account & Negotiation History (s).pdf      | Internal commercial context and open items                 |
+| USAGECSV      | Product Usage (s).csv                      | Synthetic observations with units, periods and designation |
+| USAGE         | Product Usage Report (s).pdf               | Usage interpretation and calculations                      |
+| OBLIGATIONS   | Deliverables & Service Performance (s).pdf | Promised, delivered, pending and overdue work              |
 
 Shared references have type `PRODUCT_KNOWLEDGE`; originals have type `CUAD_ORIGINAL`. The manifest contains metadata only, including a reference to each CSV, **not its rows**. Synthetic filenames end in ` (s)`; PDFs are visibly labeled `SYNTHETIC DEMO DATA`, and usage CSVs retain a designation column.
 

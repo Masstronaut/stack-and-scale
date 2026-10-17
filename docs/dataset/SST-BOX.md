@@ -21,6 +21,7 @@ Documentation only: no secrets were read or set, no AWS resources deployed, and 
    ```
 
    Enter values only in SST's private prompt. If the installed version does not provide masked input, stop and use an approved secret-manager/stdin workflow; do not fall back to inline values. Avoid `--fallback` so credentials are not unintentionally shared across stages.
+
 4. Secret setting is a cloud write, not a deployment approval. SST documents that a later deployment is required to apply changes when not using `sst dev`. Both `sst dev` and `sst deploy` can provision/update resources; run neither without explicit team approval. Do not push to `main` to apply secrets: this repository has a deployment workflow triggered by `main` pushes.
 5. After an authorized integration/deployment, verify CCG identity via a server-side current-user read returning only non-secret ID/type information, then read metadata for one allowlisted dataset file. Confirm its ID, name, parent folder and version. Test retrieval without printing bodies or credential values; a 403/404 is an access issue to review, not permission to broaden scope. No live CCG check is claimed by this handoff.
 
