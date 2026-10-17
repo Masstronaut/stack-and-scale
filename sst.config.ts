@@ -32,7 +32,10 @@ export default $config({
     const dlq = new sst.aws.Queue("JobDLQ");
 
     // Job queue. Each message is a JSON job: { fileId, recipient }.
+    // Visibility timeout must cover the consumer's 60s function timeout;
+    // AWS recommends 6x.
     const queue = new sst.aws.Queue("JobQueue", {
+      visibilityTimeout: "360 seconds",
       dlq: { queue: dlq.arn, retry: 3 },
     });
     queue.subscribe(
@@ -46,12 +49,61 @@ export default $config({
       },
     );
 
+    // Worker queues for the document pipeline (issues #2-#5). One queue per
+    // worker keeps retries/DLQs isolated per pipeline stage.
+    // TODO: link an `LLM_API_KEY` sst.Secret to the workers once an LLM
+    // provider is chosen (issues #3-#5).
+    const workerDefs = [
+      {
+        queue: "ContractScannerQueue",
+        dlq: "ContractScannerDLQ",
+        handler: "src/workers/contractScanner.handler",
+      },
+      {
+        queue: "RelatedDocumentsQueue",
+        dlq: "RelatedDocumentsDLQ",
+        handler: "src/workers/relatedDocuments.handler",
+      },
+      {
+        queue: "SalesNotesQueue",
+        dlq: "SalesNotesDLQ",
+        handler: "src/workers/salesNotes.handler",
+      },
+      {
+        queue: "SalesSlidesQueue",
+        dlq: "SalesSlidesDLQ",
+        handler: "src/workers/salesSlides.handler",
+      },
+    ];
+
+    const workerQueues: Record<string, string> = {};
+    for (const def of workerDefs) {
+      const deadLetterQueue = new sst.aws.Queue(def.dlq);
+      const workerQueue = new sst.aws.Queue(def.queue, {
+        visibilityTimeout: "1800 seconds",
+        dlq: { queue: deadLetterQueue.arn, retry: 3 },
+      });
+      workerQueue.subscribe(
+        {
+          handler: def.handler,
+          timeout: "300 seconds",
+          link: [boxClientId, boxClientSecret, boxEnterpriseId],
+        },
+        { batch: { size: 1, partialResponses: true } },
+      );
+      workerQueues[def.queue] = workerQueue.url;
+    }
+
     // HTTP API with a health check endpoint for deployment/pipeline checks.
     const api = new sst.aws.ApiGatewayV2("Api");
     api.route("GET /health", { handler: "src/functions/api.handler" });
 
     return {
       api: api.url,
+      contractScannerQueue: workerQueues["ContractScannerQueue"],
+      relatedDocumentsQueue: workerQueues["RelatedDocumentsQueue"],
+      salesNotesQueue: workerQueues["SalesNotesQueue"],
+      salesSlidesQueue: workerQueues["SalesSlidesQueue"],
     };
   },
 });

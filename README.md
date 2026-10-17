@@ -13,17 +13,35 @@ Base tech stack ([#1](https://github.com/Masstronaut/stack-and-scale/issues/1)) 
 ## Layout
 
 ```
-sst.config.ts              AWS resources: ApiGatewayV2 (/health), SQS + DLQ + consumer, SES, secrets
+sst.config.ts              AWS resources: ApiGatewayV2 (/health), SQS queues + DLQs + workers, SES, secrets
 src/lib/health.ts          shared health payload (lambda + local server)
 src/lib/box.ts             Box client (CCG auth) + file pull
 src/lib/email.ts           SES send helper
 src/functions/api.ts       GET /health lambda
 src/functions/consumer.ts  SQS job consumer (Box -> SES), partial batch responses
 src/server.ts              local HTTP server exposing the same /health handler
+src/jobs/messages.ts       pipeline job message types (what workers pass each other)
+src/services/              Effect-TS services (Box, LLM, job queue) + stub implementations
+src/workers/               pipeline worker lambdas (Effect-based) + shared SQS runner
 test/health.test.ts        spins up the local server and hits /health over HTTP
+test/workers.test.ts       runs each worker's Effect program against stub services
 scripts/smoke.ts           post-deploy smoke test against a deployed /health URL
 infra/gha-oidc.yaml        one-time CloudFormation: OIDC deploy role for GitHub Actions
 ```
+
+## Workers (issues #2-#5)
+
+Each worker is an SQS-triggered Lambda implemented with Effect-TS. Business
+logic is stubbed for now - the `TODO(#n)` comments mark what needs real
+implementations, and the service stubs in `src/services/` mark the integration
+points.
+
+| Worker             | Queue                   | Issue | Input -> Output                                                  |
+| ------------------ | ----------------------- | ----- | ---------------------------------------------------------------- |
+| `contractScanner`  | `ContractScannerQueue`  | #2    | scan box -> contracts identified, expiration stamped as metadata |
+| `relatedDocuments` | `RelatedDocumentsQueue` | #3    | contract -> list of relevant internal documents                  |
+| `salesNotes`       | `SalesNotesQueue`       | #4    | contract + relevant docs -> sales notes doc in box               |
+| `salesSlides`      | `SalesSlidesQueue`      | #5    | contract + docs + notes -> sales deck in box                     |
 
 ## Local development
 
