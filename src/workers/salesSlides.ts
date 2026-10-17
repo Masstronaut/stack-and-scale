@@ -10,14 +10,17 @@ import {
   type BoxManifest,
   type ManifestDocument,
 } from "../lib/manifest.ts";
+import { RunTrackerService } from "../services/runs.ts";
+import { RunTrackerServiceLive } from "../services/runs-live.ts";
 import { LlmService } from "../services/llm.ts";
 import { LlmServiceLive } from "../services/llm-live.ts";
-import { createSqsWorker, parseJson } from "./runner.ts";
+import { createSqsWorker, parseJson, withRunTracking } from "./runner.ts";
 
 // Worker for issue #5: generate the sales conversation deck.
 //
 // input:  SalesSlidesJob { contractFileId, relevantDocumentIds,
-//         salesNotesFileId } (from worker #4)
+//         salesNotesFileId, runId? } (from worker #4; the runId closes out
+//         the run started by worker #2)
 // output: a self-contained static HTML slide deck uploaded to box as
 //         "Sales Deck <customer>.html" (gated on BOX_WRITE_ENABLED) and
 //         written to the artifact sink as
@@ -84,7 +87,7 @@ ${contextDocuments
 - cite every factual claim inline as [doc_type: filename];
 - reply with the HTML document only, starting with <!DOCTYPE html>.`;
 
-export const processJob = (job: SalesSlidesJob, boxManifest: BoxManifest = loadManifest()) =>
+const build = (job: SalesSlidesJob, boxManifest: BoxManifest) =>
   Effect.gen(function* () {
     const box = yield* BoxService;
     const llm = yield* LlmService;
@@ -172,7 +175,7 @@ export const processJob = (job: SalesSlidesJob, boxManifest: BoxManifest = loadM
       "text/html",
     );
 
-    // Run summary until real run tracking lands in a later phase.
+    // Run summary (also captured in the run record's output).
     console.log(
       "slides run:",
       JSON.stringify({
@@ -201,8 +204,20 @@ export const processJob = (job: SalesSlidesJob, boxManifest: BoxManifest = loadM
     };
   });
 
+export const processJob = (job: SalesSlidesJob, boxManifest: BoxManifest = loadManifest()) =>
+  withRunTracking(
+    {
+      stage: "salesSlides",
+      key: (tracked) => `${tracked.contractFileId}/salesSlides`,
+      artifactKeys: (tracked) => [`artifacts/${tracked.contractFileId}/sales-deck.html`],
+    },
+    job,
+    build(job, boxManifest),
+  );
+
 const withLiveServices = (job: SalesSlidesJob) =>
   processJob(job).pipe(
+    Effect.provideService(RunTrackerService, RunTrackerServiceLive),
     Effect.provideService(BoxService, BoxServiceLive),
     Effect.provideService(LlmService, LlmServiceLive),
     Effect.provideService(ArtifactsService, ArtifactsServiceLive),

@@ -7,3 +7,4 @@ dist/
 sst-env.d.ts
 .renewer-cache/
 .renewer-artifacts/
+/slides/

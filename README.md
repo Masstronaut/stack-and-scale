@@ -101,6 +101,8 @@ Each queue message is a JSON job; the consumer pulls the file from Box and email
 | `SES_SENDER_EMAIL`                                                                   | `sst.config.ts` | Verified SES sender (address or domain)      |
 | `PORT`                                                                               | `src/server.ts` | Local health server port (default 3000)      |
 
+Not a `.env` variable: `ARTIFACTS_BUCKET` is an SST-linked private bucket (`sst.aws.Bucket "Artifacts"`) wired to the workers and the `/runs` + `/artifacts` routes in `sst.config.ts` — run tracking records (`runs/<runId>/*.json`) and pipeline artifacts (`artifacts/...`) land there; services skip writes when it is unset.
+
 ### GitHub Actions environment
 
 Set these in the **`production` environment** (Settings → Environments → production) as _variables_:

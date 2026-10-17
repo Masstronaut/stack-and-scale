@@ -10,17 +10,20 @@ import {
   type BoxManifest,
   type ManifestDocument,
 } from "../lib/manifest.ts";
+import { RunTrackerService } from "../services/runs.ts";
+import { RunTrackerServiceLive } from "../services/runs-live.ts";
 import { LlmService } from "../services/llm.ts";
 import { LlmServiceLive } from "../services/llm-live.ts";
 import { JobQueueService } from "../services/jobs.ts";
 import { JobQueueServiceLive } from "../services/jobs-live.ts";
-import { createSqsWorker, parseJson } from "./runner.ts";
+import { createSqsWorker, parseJson, withRunTracking } from "./runner.ts";
 
 // Worker for issue #3: identify documents related to a customer contract.
 //
-// input:  RelatedDocumentsJob { contractFileId } (from worker #2)
-// output: one SalesNotesJob { contractFileId, relevantDocumentIds } for
-//         worker #4; the queue message is the only artifact (no box writes).
+// input:  RelatedDocumentsJob { contractFileId, runId? } (from worker #2)
+// output: one SalesNotesJob { contractFileId, relevantDocumentIds, runId }
+//         for worker #4; the queue message is the only artifact (no box
+//         writes). The runId threads the pass together for run tracking.
 //
 // Manifest-first (see docs/dataset/WORKERS.md): the contract is resolved by
 // exact manifest id - a CUAD original resolves to its mapped customer with
@@ -105,7 +108,7 @@ const selectSharedFileIds = (
     );
   });
 
-export const processJob = (job: RelatedDocumentsJob, boxManifest: BoxManifest = loadManifest()) =>
+const analyze = (job: RelatedDocumentsJob, boxManifest: BoxManifest) =>
   Effect.gen(function* () {
     const queues = yield* JobQueueService;
 
@@ -149,7 +152,11 @@ export const processJob = (job: RelatedDocumentsJob, boxManifest: BoxManifest = 
 
     // Step 4: hand the union to the sales notes worker.
     const relevantDocumentIds = [...baseline.map((entry) => entry.fileId), ...sharedIds];
-    yield* queues.enqueue({ contractFileId: job.contractFileId, relevantDocumentIds });
+    yield* queues.enqueue({
+      contractFileId: job.contractFileId,
+      relevantDocumentIds,
+      runId: job.runId,
+    });
 
     return {
       contractFileId: job.contractFileId,
@@ -161,8 +168,16 @@ export const processJob = (job: RelatedDocumentsJob, boxManifest: BoxManifest = 
     };
   });
 
+export const processJob = (job: RelatedDocumentsJob, boxManifest: BoxManifest = loadManifest()) =>
+  withRunTracking(
+    { stage: "relatedDocuments", key: (tracked) => `${tracked.contractFileId}/relatedDocuments` },
+    job,
+    analyze(job, boxManifest),
+  );
+
 const withLiveServices = (job: RelatedDocumentsJob) =>
   processJob(job).pipe(
+    Effect.provideService(RunTrackerService, RunTrackerServiceLive),
     Effect.provideService(BoxService, BoxServiceLive),
     Effect.provideService(LlmService, LlmServiceLive),
     Effect.provideService(JobQueueService, JobQueueServiceLive),

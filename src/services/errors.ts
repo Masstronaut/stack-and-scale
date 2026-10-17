@@ -15,3 +15,7 @@ export class QueueError extends Data.TaggedError("QueueError")<{
 export class ArtifactsError extends Data.TaggedError("ArtifactsError")<{
   readonly cause: unknown;
 }> {}
+
+export class RunsError extends Data.TaggedError("RunsError")<{
+  readonly cause: unknown;
+}> {}

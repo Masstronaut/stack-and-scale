@@ -8,10 +8,21 @@ import type {
   SalesSlidesJob,
 } from "../src/jobs/messages.ts";
 import { ArtifactsServiceLive } from "../src/services/artifacts-live.ts";
-import { ArtifactsService, type ArtifactsServiceShape } from "../src/services/artifacts.ts";
+import {
+  ArtifactsService,
+  ArtifactsServiceStub,
+  type ArtifactsServiceShape,
+} from "../src/services/artifacts.ts";
 import { BoxService, type BoxServiceShape, type FileRef } from "../src/services/box.ts";
-import { BoxError, LlmError } from "../src/services/errors.ts";
+import { BoxError, LlmError, RunsError } from "../src/services/errors.ts";
 import { JobQueueService, type JobQueueServiceShape } from "../src/services/jobs.ts";
+import { RunTrackerServiceLive } from "../src/services/runs-live.ts";
+import {
+  RunTrackerService,
+  RunTrackerServiceStub,
+  type RunTrackerServiceShape,
+  type StageRecord,
+} from "../src/services/runs.ts";
 import {
   findDocumentByFileId,
   loadManifest,
@@ -21,6 +32,9 @@ import {
   type ManifestDocument,
 } from "../src/lib/manifest.ts";
 import { LlmService, type LlmServiceShape } from "../src/services/llm.ts";
+import * as artifactRoute from "../src/functions/artifact.ts";
+import * as dashboardRoute from "../src/functions/dashboard.ts";
+import * as runsRoute from "../src/functions/runs.ts";
 import * as contractScanner from "../src/workers/contractScanner.ts";
 import * as relatedDocuments from "../src/workers/relatedDocuments.ts";
 import * as salesNotes from "../src/workers/salesNotes.ts";
@@ -108,11 +122,24 @@ const makeQueueFake = () => {
   return { queues, enqueued };
 };
 
+const makeRunsFake = () => {
+  const records: StageRecord[] = [];
+  const runs: RunTrackerServiceShape = {
+    recordStage: (record) =>
+      Effect.sync(() => {
+        records.push({ ...record });
+      }),
+  };
+  return { runs, records };
+};
+
 const runScan = async (
   box: BoxServiceShape,
   llm: LlmServiceShape,
   queues: JobQueueServiceShape,
-  agreements = selectAgreementFiles(loadManifest()),
+  agreements: readonly ManifestDocument[] = selectAgreementFiles(loadManifest()),
+  artifacts: ArtifactsServiceShape = ArtifactsServiceStub,
+  runs: RunTrackerServiceShape = RunTrackerServiceStub,
 ) =>
   Effect.runPromise(
     contractScanner
@@ -121,6 +148,8 @@ const runScan = async (
         Effect.provideService(BoxService, box),
         Effect.provideService(LlmService, llm),
         Effect.provideService(JobQueueService, queues),
+        Effect.provideService(ArtifactsService, artifacts),
+        Effect.provideService(RunTrackerService, runs),
       ),
   );
 
@@ -300,6 +329,7 @@ const runRelated = (
   llm: LlmServiceShape,
   queues: JobQueueServiceShape,
   boxManifest: BoxManifest = relatedManifest,
+  runs: RunTrackerServiceShape = RunTrackerServiceStub,
 ) =>
   Effect.runPromise(
     relatedDocuments
@@ -308,6 +338,7 @@ const runRelated = (
         Effect.provideService(BoxService, box),
         Effect.provideService(LlmService, llm),
         Effect.provideService(JobQueueService, queues),
+        Effect.provideService(RunTrackerService, runs),
       ),
   );
 
@@ -317,6 +348,8 @@ const runNotes = (
   llm: LlmServiceShape,
   queues: JobQueueServiceShape,
   boxManifest: BoxManifest = relatedManifest,
+  artifacts: ArtifactsServiceShape = ArtifactsServiceStub,
+  runs: RunTrackerServiceShape = RunTrackerServiceStub,
 ) =>
   Effect.runPromise(
     salesNotes
@@ -325,6 +358,8 @@ const runNotes = (
         Effect.provideService(BoxService, box),
         Effect.provideService(LlmService, llm),
         Effect.provideService(JobQueueService, queues),
+        Effect.provideService(ArtifactsService, artifacts),
+        Effect.provideService(RunTrackerService, runs),
       ),
   );
 
@@ -346,6 +381,7 @@ const runSlides = (
   llm: LlmServiceShape,
   artifacts: ArtifactsServiceShape,
   boxManifest: BoxManifest = relatedManifest,
+  runs: RunTrackerServiceShape = RunTrackerServiceStub,
 ) =>
   Effect.runPromise(
     salesSlides
@@ -354,6 +390,7 @@ const runSlides = (
         Effect.provideService(BoxService, box),
         Effect.provideService(LlmService, llm),
         Effect.provideService(ArtifactsService, artifacts),
+        Effect.provideService(RunTrackerService, runs),
       ),
   );
 
@@ -394,7 +431,14 @@ describe("workers", () => {
     const { llm } = makeLlmFake();
     const { queues } = makeQueueFake();
     const result = await runScan(box, llm, queues, []);
-    expect(result).toEqual({ scanned: 0, contracts: 0, mode: "full-scan" });
+    expect(result).toEqual({
+      scanned: 0,
+      contracts: 0,
+      mode: "full-scan",
+      contractsFound: 0,
+      contractsStamped: 0,
+      jobsEnqueued: 0,
+    });
   });
 
   it("scans exactly the manifest agreements without LLM classification and gates writes (#2)", async () => {
@@ -409,7 +453,14 @@ describe("workers", () => {
 
       const result = await runScan(box, llm, queues, agreements);
 
-      expect(result).toEqual({ scanned: 24, contracts: 24, mode: "manifest" });
+      expect(result).toEqual({
+        scanned: 24,
+        contracts: 24,
+        mode: "manifest",
+        contractsFound: 24,
+        contractsStamped: 24,
+        jobsEnqueued: 24,
+      });
       expect(calls).toHaveLength(24); // date extraction only
       expect(calls.some((prompt) => prompt.startsWith(CLASSIFY_PREFIX))).toBe(false);
       expect(metadataWrites).toHaveLength(24);
@@ -422,9 +473,11 @@ describe("workers", () => {
         expect(agreements.some((agreement) => agreement.box_file_id === write.fileId)).toBe(true);
         expect(sourceIds.has(write.fileId)).toBe(false);
       }
-      expect(enqueued).toEqual(
+      expect(enqueued.map((job) => ({ contractFileId: job.contractFileId }))).toEqual(
         agreements.map((agreement) => ({ contractFileId: agreement.box_file_id })),
       );
+      // one runId ties the whole pass together
+      expect(new Set(enqueued.map((job) => (job as RelatedDocumentsJob).runId)).size).toBe(1);
     });
   });
 
@@ -436,7 +489,14 @@ describe("workers", () => {
 
       const result = await runScan(box, llm, queues);
 
-      expect(result).toEqual({ scanned: 24, contracts: 24, mode: "manifest" });
+      expect(result).toEqual({
+        scanned: 24,
+        contracts: 24,
+        mode: "manifest",
+        contractsFound: 24,
+        contractsStamped: 24,
+        jobsEnqueued: 24,
+      });
       expect(metadataWrites).toEqual([]);
       expect(enqueued).toHaveLength(24);
       expect(calls).toHaveLength(24);
@@ -462,7 +522,14 @@ describe("workers", () => {
       runScan(box, llm, queues, []),
     );
 
-    expect(result).toEqual({ scanned: 2, contracts: 1, mode: "full-scan" });
+    expect(result).toEqual({
+      scanned: 2,
+      contracts: 1,
+      mode: "full-scan",
+      contractsFound: 1,
+      contractsStamped: 1,
+      jobsEnqueued: 1,
+    });
     expect(metadataWrites).toEqual([
       {
         fileId: "contract-1",
@@ -473,7 +540,7 @@ describe("workers", () => {
         },
       },
     ]);
-    expect(enqueued).toEqual([{ contractFileId: "contract-1" }]);
+    expect(enqueued).toEqual([{ contractFileId: "contract-1", runId: expect.any(String) }]);
     expect(calls).toHaveLength(3); // 2 classifications + 1 date extraction
   });
 
@@ -486,7 +553,14 @@ describe("workers", () => {
 
     const result = await runScan(box, llm, queues, []);
 
-    expect(result).toEqual({ scanned: 1, contracts: 0, mode: "full-scan" });
+    expect(result).toEqual({
+      scanned: 1,
+      contracts: 0,
+      mode: "full-scan",
+      contractsFound: 0,
+      contractsStamped: 0,
+      jobsEnqueued: 0,
+    });
     expect(metadataWrites).toEqual([]);
     expect(enqueued).toEqual([]);
     expect(calls).toHaveLength(1); // only the classification
@@ -502,7 +576,14 @@ describe("workers", () => {
 
     const result = await runScan(box, llm, queues, []);
 
-    expect(result).toEqual({ scanned: 1, contracts: 0, mode: "full-scan" });
+    expect(result).toEqual({
+      scanned: 1,
+      contracts: 0,
+      mode: "full-scan",
+      contractsFound: 0,
+      contractsStamped: 0,
+      jobsEnqueued: 0,
+    });
     expect(calls).toEqual([]);
     expect(metadataWrites).toEqual([]);
     expect(enqueued).toEqual([]);
@@ -529,7 +610,7 @@ describe("workers", () => {
         },
       },
     ]);
-    expect(enqueued).toEqual([{ contractFileId: "contract-1" }]);
+    expect(enqueued).toEqual([{ contractFileId: "contract-1", runId: expect.any(String) }]);
   });
 
   it("keeps scanning when one file fails but fails the job when all of them do (#2)", async () => {
@@ -552,9 +633,16 @@ describe("workers", () => {
     const result = await withEnv({ BOX_WRITE_ENABLED: "true" }, () =>
       runScan(box, llm, queues, []),
     );
-    expect(result).toEqual({ scanned: 2, contracts: 1, mode: "full-scan" });
+    expect(result).toEqual({
+      scanned: 2,
+      contracts: 1,
+      mode: "full-scan",
+      contractsFound: 1,
+      contractsStamped: 1,
+      jobsEnqueued: 1,
+    });
     expect(metadataWrites.map((write) => write.fileId)).toEqual(["contract-1"]);
-    expect(enqueued).toEqual([{ contractFileId: "contract-1" }]);
+    expect(enqueued).toEqual([{ contractFileId: "contract-1", runId: expect.any(String) }]);
 
     await expect(
       withEnv({ BOX_WRITE_ENABLED: "true" }, () => runScan(failing.box, llm, queues, [])),
@@ -944,6 +1032,248 @@ describe("workers", () => {
       }),
     );
     expect(result.batchItemFailures).toEqual([{ itemIdentifier: "msg-0" }]);
+  });
+
+  it("threads one runId through all three enqueue hops (#2-#5)", async () => {
+    await withEnv({ BOX_WRITE_ENABLED: "true" }, async () => {
+      const { box } = makeBoxFake({ files: [] });
+      const { llm } = makeRelatedLlmFake({
+        reply:
+          '<!DOCTYPE html><html><body><section class="slide"><h2>Acme</h2></section></body></html>',
+      });
+      const { queues, enqueued } = makeQueueFake();
+      const { artifacts } = makeArtifactsFake();
+
+      // worker #2 generates the runId and carries it into the related job
+      await runScan(box, llm, queues, selectAgreementFiles(fixtureManifest), artifacts);
+      const relatedJob = enqueued[0] as RelatedDocumentsJob;
+      expect(relatedJob.contractFileId).toBe("agr-1");
+      expect(typeof relatedJob.runId).toBe("string");
+
+      // worker #3 forwards it to the notes job
+      await runRelated(relatedJob, box, llm, queues);
+      const notesJob = enqueued[1] as SalesNotesJob;
+      expect(notesJob.runId).toBe(relatedJob.runId);
+
+      // worker #4 forwards it to the slides job
+      await runNotes(notesJob, box, llm, queues);
+      const slidesJob = enqueued[2] as SalesSlidesJob;
+      expect(slidesJob.runId).toBe(relatedJob.runId);
+
+      // worker #5 is the terminal stage
+      await runSlides(slidesJob, box, llm, artifacts);
+      expect(enqueued).toHaveLength(3);
+    });
+  });
+
+  it("records running + ok run records with per-stage keys (#2-#5)", async () => {
+    await withEnv({ BOX_WRITE_ENABLED: "true" }, async () => {
+      const { box } = makeBoxFake({ files: [] });
+      const { llm } = makeRelatedLlmFake({
+        reply:
+          '<!DOCTYPE html><html><body><section class="slide"><h2>Acme</h2></section></body></html>',
+      });
+      const { queues } = makeQueueFake();
+      const { artifacts } = makeArtifactsFake();
+
+      // worker #2: one aggregate record for the whole pass
+      const scanTracking = makeRunsFake();
+      await runScan(
+        box,
+        llm,
+        queues,
+        selectAgreementFiles(fixtureManifest),
+        artifacts,
+        scanTracking.runs,
+      );
+      expect(scanTracking.records.map((r) => [r.stage, r.key, r.status])).toEqual([
+        ["contractScanner", "scanner", "running"],
+        ["contractScanner", "scanner", "ok"],
+      ]);
+      expect(scanTracking.records[1]!.output).toMatchObject({
+        contractsFound: 1,
+        contractsStamped: 1,
+        jobsEnqueued: 1,
+      });
+      expect(scanTracking.records[1]!.artifactKeys).toEqual([
+        `artifacts/scan/${scanTracking.records[0]!.runId}/scan-summary.json`,
+      ]);
+      expect(scanTracking.records[1]!.finishedAt).toBeDefined();
+
+      // worker #3: one record per contract within the run prefix
+      const relatedTracking = makeRunsFake();
+      await runRelated(
+        { contractFileId: "agr-1", runId: "run-1" },
+        box,
+        llm,
+        queues,
+        relatedManifest,
+        relatedTracking.runs,
+      );
+      expect(relatedTracking.records.map((r) => [r.stage, r.key, r.status])).toEqual([
+        ["relatedDocuments", "agr-1/relatedDocuments", "running"],
+        ["relatedDocuments", "agr-1/relatedDocuments", "ok"],
+      ]);
+
+      // worker #4: notes record lists the notes artifact
+      const notesTracking = makeRunsFake();
+      await runNotes(
+        { contractFileId: "agr-1", relevantDocumentIds: [], runId: "run-1" },
+        box,
+        llm,
+        queues,
+        relatedManifest,
+        artifacts,
+        notesTracking.runs,
+      );
+      expect(notesTracking.records.map((r) => [r.stage, r.key, r.status])).toEqual([
+        ["salesNotes", "agr-1/salesNotes", "running"],
+        ["salesNotes", "agr-1/salesNotes", "ok"],
+      ]);
+      expect(notesTracking.records[1]!.artifactKeys).toEqual(["artifacts/agr-1/sales-notes.md"]);
+
+      // worker #5: slides record lists the deck artifact
+      const slidesTracking = makeRunsFake();
+      await runSlides(
+        { contractFileId: "agr-1", relevantDocumentIds: [], salesNotesFileId: "", runId: "run-1" },
+        box,
+        llm,
+        artifacts,
+        relatedManifest,
+        slidesTracking.runs,
+      );
+      expect(slidesTracking.records.map((r) => [r.stage, r.key, r.status])).toEqual([
+        ["salesSlides", "agr-1/salesSlides", "running"],
+        ["salesSlides", "agr-1/salesSlides", "ok"],
+      ]);
+      expect(slidesTracking.records[1]!.artifactKeys).toEqual(["artifacts/agr-1/sales-deck.html"]);
+    });
+  });
+
+  it("stores the scan summary artifact with counts and contract ids (#2)", async () => {
+    await withEnv({ BOX_WRITE_ENABLED: "true" }, async () => {
+      const { box } = makeBoxFake({ files: [] });
+      const { llm } = makeRelatedLlmFake({ reply: "2027-01-31" });
+      const { queues } = makeQueueFake();
+      const { artifacts, puts } = makeArtifactsFake();
+
+      const result = await runScan(
+        box,
+        llm,
+        queues,
+        selectAgreementFiles(fixtureManifest),
+        artifacts,
+      );
+
+      expect(puts).toHaveLength(1);
+      expect(puts[0]!.key).toMatch(/^artifacts\/scan\/.+\/scan-summary\.json$/);
+      expect(puts[0]!.contentType).toBe("application/json");
+      const summary = JSON.parse(puts[0]!.content as string) as Record<string, unknown>;
+      expect(summary).toMatchObject({
+        contractsFound: 1,
+        contractsStamped: 1,
+        jobsEnqueued: 1,
+        contractFileIds: ["agr-1"],
+      });
+      expect(result.jobsEnqueued).toBe(1);
+    });
+  });
+
+  it("stores the notes markdown as a run artifact (#4)", async () => {
+    await withEnv({ BOX_WRITE_ENABLED: "true" }, async () => {
+      const { box } = makeBoxFake({ files: [] });
+      const { llm } = makeRelatedLlmFake({ reply: "## Account context\nAcme renews." });
+      const { queues } = makeQueueFake();
+      const { artifacts, puts } = makeArtifactsFake();
+
+      await runNotes(
+        { contractFileId: "agr-1", relevantDocumentIds: [], runId: "run-1" },
+        box,
+        llm,
+        queues,
+        relatedManifest,
+        artifacts,
+      );
+
+      expect(puts).toHaveLength(1);
+      expect(puts[0]!.key).toBe("artifacts/agr-1/sales-notes.md");
+      expect(puts[0]!.contentType).toBe("text/markdown");
+      expect(puts[0]!.content).toContain("Acme renews.");
+    });
+  });
+
+  it("records a failed stage record and still fails the job (#5)", async () => {
+    const { box } = makeBoxFake({ files: [] });
+    const { llm } = makeRelatedLlmFake({ fail: true });
+    const { artifacts } = makeArtifactsFake();
+    const { runs, records } = makeRunsFake();
+
+    await expect(
+      runSlides({ ...SLIDES_JOB, runId: "run-fail" }, box, llm, artifacts, relatedManifest, runs),
+    ).rejects.toMatchObject({ _tag: "LlmError" });
+
+    expect(records.map((record) => record.status)).toEqual(["running", "failed"]);
+    expect(records[1]!.error).toContain("LlmError");
+    expect(records[1]!.finishedAt).toBeDefined();
+  });
+
+  it("never fails pipeline jobs on tracking errors and skips records without a bucket", async () => {
+    const { box } = makeBoxFake({ files: [] });
+    const { llm } = makeRelatedLlmFake({
+      reply:
+        '<!DOCTYPE html><html><body><section class="slide"><h2>Acme</h2></section></body></html>',
+    });
+    const { artifacts } = makeArtifactsFake();
+    const failingRuns: RunTrackerServiceShape = {
+      recordStage: () => Effect.fail(new RunsError({ cause: new Error("s3 down") })),
+    };
+
+    const result = await runSlides(
+      { ...SLIDES_JOB, runId: "run-x" },
+      box,
+      llm,
+      artifacts,
+      relatedManifest,
+      failingRuns,
+    );
+    expect(result.deckFileName).toBe("Sales Deck Acme.html");
+
+    await withEnv({ ARTIFACTS_BUCKET: undefined }, async () => {
+      await Effect.runPromise(
+        RunTrackerServiceLive.recordStage({
+          runId: "run-x",
+          stage: "salesSlides",
+          key: "agr-1/salesSlides",
+          status: "ok",
+          startedAt: new Date().toISOString(),
+        }),
+      );
+    });
+  });
+
+  it("only shares artifacts/ keys without traversal on the artifacts route (#6)", () => {
+    expect(artifactRoute.validateArtifactKey("artifacts/agr-1/sales-deck.html")).toBe(
+      "artifacts/agr-1/sales-deck.html",
+    );
+    expect(artifactRoute.validateArtifactKey("artifacts/scan/run-1/scan-summary.json")).toBe(
+      "artifacts/scan/run-1/scan-summary.json",
+    );
+    expect(artifactRoute.validateArtifactKey("runs/run-1/record.json")).toBeUndefined();
+    expect(artifactRoute.validateArtifactKey("artifacts/../runs/record.json")).toBeUndefined();
+    expect(artifactRoute.validateArtifactKey(undefined)).toBeUndefined();
+    expect(artifactRoute.validateArtifactKey("")).toBeUndefined();
+  });
+
+  it("lists no runs and serves the dashboard page when no bucket is wired (#6)", async () => {
+    await withEnv({ ARTIFACTS_BUCKET: undefined }, async () => {
+      await expect(runsRoute.listRuns()).resolves.toEqual([]);
+    });
+
+    const response = await dashboardRoute.handler({ rawPath: "/dashboard" } as never, {} as never);
+    expect(response.statusCode).toBe(200);
+    expect(response.headers?.["content-type"]).toContain("text/html");
+    expect(String(response.body)).toContain('id="rows"');
+    expect(String(response.body)).toContain("setInterval(refresh, 5000)");
   });
 
   it("routes malformed messages to the dead-letter path instead of crashing", async () => {

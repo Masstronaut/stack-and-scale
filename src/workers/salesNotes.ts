@@ -1,5 +1,7 @@
 import { Data, Effect, Result } from "effect";
 import type { SalesNotesJob } from "../jobs/messages.ts";
+import { ArtifactsService } from "../services/artifacts.ts";
+import { ArtifactsServiceLive } from "../services/artifacts-live.ts";
 import { BoxService } from "../services/box.ts";
 import { BoxServiceLive } from "../services/box-live.ts";
 import {
@@ -8,17 +10,22 @@ import {
   type BoxManifest,
   type ManifestDocument,
 } from "../lib/manifest.ts";
+import { RunTrackerService } from "../services/runs.ts";
+import { RunTrackerServiceLive } from "../services/runs-live.ts";
 import { LlmService } from "../services/llm.ts";
 import { LlmServiceLive } from "../services/llm-live.ts";
 import { JobQueueService } from "../services/jobs.ts";
 import { JobQueueServiceLive } from "../services/jobs-live.ts";
-import { createSqsWorker, parseJson } from "./runner.ts";
+import { createSqsWorker, parseJson, withRunTracking } from "./runner.ts";
 
 // Worker for issue #4: generate a sales notes document.
 //
-// input:  SalesNotesJob { contractFileId, relevantDocumentIds } (from worker #3)
+// input:  SalesNotesJob { contractFileId, relevantDocumentIds, runId? }
+//         (from worker #3)
 // output: grounded markdown sales notes uploaded to box as
-//         "Sales Notes <customer>.md", plus one SalesSlidesJob for worker #5.
+//         "Sales Notes <customer>.md", the same notes stored as the run
+//         artifact `artifacts/<contractFileId>/sales-notes.md`, plus one
+//         SalesSlidesJob for worker #5 carrying the runId through.
 //
 // Manifest-first (see docs/dataset/WORKERS.md): the contract resolves by
 // exact manifest id - unknown or customer-less ids fail so they dead-letter.
@@ -69,11 +76,12 @@ ${contextDocuments
     "\n\n",
   )}\n\nWrite grounded sales notes for the renewal call with this customer. Use exactly these sections: account context; current scope and renewal/notice conditions; customer priorities; value evidenced; delivery/adoption gaps; decisions required; open questions; proposed next steps; citations. In "value evidenced", recompute or quote exact usage figures from USAGECSV/USAGE content when present, showing inputs, formula, period and currency - never invent numbers. Cite every factual claim inline as [doc_type: filename]. Recommend expansion only when the evidence supports it; otherwise say which of continuation, adoption support or remediation is warranted. End with a citations section listing every document used.`;
 
-export const processJob = (job: SalesNotesJob, boxManifest: BoxManifest = loadManifest()) =>
+const draft = (job: SalesNotesJob, boxManifest: BoxManifest) =>
   Effect.gen(function* () {
     const box = yield* BoxService;
     const llm = yield* LlmService;
     const queues = yield* JobQueueService;
+    const artifacts = yield* ArtifactsService;
 
     // Step 1: resolve the contract by exact manifest id. Unknown or
     // customer-less (shared) ids fail the job so they dead-letter.
@@ -126,11 +134,21 @@ export const processJob = (job: SalesNotesJob, boxManifest: BoxManifest = loadMa
       console.log(`box write disabled, would upload ${notesFileName}:`, notes);
     }
 
-    // Step 6: hand everything to the deck worker; "" means no notes file.
+    // Step 6: store the notes as the run artifact too - independent of the
+    // box write gate so the run's artifact link exists either way (the
+    // artifact sink has its own ARTIFACTS_BUCKET gate).
+    yield* artifacts.putArtifact(
+      `artifacts/${job.contractFileId}/sales-notes.md`,
+      notes,
+      "text/markdown",
+    );
+
+    // Step 7: hand everything to the deck worker; "" means no notes file.
     yield* queues.enqueue({
       contractFileId: job.contractFileId,
       relevantDocumentIds: job.relevantDocumentIds,
       salesNotesFileId,
+      runId: job.runId,
     });
 
     return {
@@ -144,11 +162,24 @@ export const processJob = (job: SalesNotesJob, boxManifest: BoxManifest = loadMa
     };
   });
 
+export const processJob = (job: SalesNotesJob, boxManifest: BoxManifest = loadManifest()) =>
+  withRunTracking(
+    {
+      stage: "salesNotes",
+      key: (tracked) => `${tracked.contractFileId}/salesNotes`,
+      artifactKeys: (tracked) => [`artifacts/${tracked.contractFileId}/sales-notes.md`],
+    },
+    job,
+    draft(job, boxManifest),
+  );
+
 const withLiveServices = (job: SalesNotesJob) =>
   processJob(job).pipe(
+    Effect.provideService(RunTrackerService, RunTrackerServiceLive),
     Effect.provideService(BoxService, BoxServiceLive),
     Effect.provideService(LlmService, LlmServiceLive),
     Effect.provideService(JobQueueService, JobQueueServiceLive),
+    Effect.provideService(ArtifactsService, ArtifactsServiceLive),
   );
 
 export const handler = createSqsWorker(parseJson, withLiveServices);

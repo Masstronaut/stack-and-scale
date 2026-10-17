@@ -61,11 +61,15 @@ export default $config({
     // configurable per stage and default to the box root folder ("0");
     // generated notes land in BOX_OUTPUT_FOLDER_ID when set, defaulting to
     // the scan root. relatedDocuments gets the same root for read-only
-    // contract text reads and never writes box. TODO: link an
-    // `ARTIFACTS_BUCKET` for the slides worker's artifact sink once the
-    // bucket resource exists (later phase).
+    // contract text reads and never writes box.
+    //
+    // Run tracking + artifacts share one private S3 bucket: workers PUT
+    // stage records under `runs/<runId>/` and outputs under `artifacts/...`
+    // (both gated on ARTIFACTS_BUCKET at runtime), and the /runs +
+    // /artifacts routes read/presign from the same bucket.
     const boxRootFolderId = process.env.BOX_ROOT_FOLDER_ID ?? "0";
     const boxOutputFolderId = process.env.BOX_OUTPUT_FOLDER_ID ?? boxRootFolderId;
+    const artifacts = new sst.aws.Bucket("Artifacts");
     interface WorkerDef {
       readonly queue: string;
       readonly dlq: string;
@@ -80,6 +84,7 @@ export default $config({
         environment: {
           BOX_WRITE_ENABLED: "true",
           BOX_ROOT_FOLDER_ID: boxRootFolderId,
+          ARTIFACTS_BUCKET: artifacts.name,
         },
       },
       {
@@ -88,6 +93,7 @@ export default $config({
         handler: "src/workers/relatedDocuments.handler",
         environment: {
           BOX_ROOT_FOLDER_ID: boxRootFolderId,
+          ARTIFACTS_BUCKET: artifacts.name,
         },
       },
       {
@@ -98,6 +104,7 @@ export default $config({
           BOX_WRITE_ENABLED: "true",
           BOX_ROOT_FOLDER_ID: boxRootFolderId,
           BOX_OUTPUT_FOLDER_ID: boxOutputFolderId,
+          ARTIFACTS_BUCKET: artifacts.name,
         },
       },
       {
@@ -108,6 +115,7 @@ export default $config({
           BOX_WRITE_ENABLED: "true",
           BOX_ROOT_FOLDER_ID: boxRootFolderId,
           BOX_OUTPUT_FOLDER_ID: boxOutputFolderId,
+          ARTIFACTS_BUCKET: artifacts.name,
         },
       },
     ];
@@ -139,6 +147,7 @@ export default $config({
             boxClientId,
             boxClientSecret,
             boxEnterpriseId,
+            artifacts,
             ...downstreamQueues[def.queue].map((name) => workerQueues[name]),
           ],
         },
@@ -146,9 +155,15 @@ export default $config({
       );
     }
 
-    // HTTP API with a health check endpoint for deployment/pipeline checks.
+    // HTTP API with a health check endpoint for deployment/pipeline checks,
+    // plus the run-tracking dashboard surface: /runs lists recent runs,
+    // /artifacts hands out presigned GET urls for artifact keys (the bucket
+    // itself stays private), /dashboard serves the polling UI.
     const api = new sst.aws.ApiGatewayV2("Api");
     api.route("GET /health", { handler: "src/functions/api.handler" });
+    api.route("GET /runs", { handler: "src/functions/runs.handler", link: [artifacts] });
+    api.route("GET /artifacts", { handler: "src/functions/artifact.handler", link: [artifacts] });
+    api.route("GET /dashboard", { handler: "src/functions/dashboard.handler" });
 
     return {
       api: api.url,
