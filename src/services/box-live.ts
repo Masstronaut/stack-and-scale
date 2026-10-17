@@ -3,7 +3,7 @@ import { readByteStream, stringToByteStream } from "box-node-sdk/internal";
 import { Effect } from "effect";
 import { createBoxClient } from "../lib/box.ts";
 import type { BoxServiceShape, FileRef } from "./box.ts";
-import type { BoxError } from "./errors.ts";
+import { BoxError } from "./errors.ts";
 
 const FOLDER_PAGE_LIMIT = 1000;
 const METADATA_SCOPE = "global";

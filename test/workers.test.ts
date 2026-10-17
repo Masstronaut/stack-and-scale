@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { SQSEvent, SQSHandler } from "aws-lambda";
-import { Effect } from "effect";
+import { Cause, Effect } from "effect";
 import type {
   DocDigestJob,
   PipelineJob,
@@ -9,6 +9,7 @@ import type {
   SalesSlidesJob,
 } from "../src/jobs/messages.ts";
 import { ArtifactsServiceLive } from "../src/services/artifacts-live.ts";
+import { BoxServiceLive } from "../src/services/box-live.ts";
 import {
   ArtifactsService,
   ArtifactsServiceStub,
@@ -1560,5 +1561,32 @@ describe("workers", () => {
   it("routes malformed messages to the dead-letter path instead of crashing", async () => {
     const result = await run(contractScanner.handler, "not json");
     expect(result.batchItemFailures).toEqual([{ itemIdentifier: "msg-0" }]);
+  });
+});
+
+describe("live service layers", () => {
+  it("box-live wraps infrastructure failures in BoxError, not a bundle-time ReferenceError", async () => {
+    // Regression: BoxError was imported type-only in box-live.ts, so the
+    // bundled lambda crashed with `ReferenceError: BoxError is not defined`
+    // the moment any Box call failed. Executing the real error path keeps
+    // that import honest.
+    const exit = await Effect.runPromiseExit(BoxServiceLive.getFileText("no-such-file"));
+    expect(exit._tag).toBe("Failure");
+    if (exit._tag !== "Failure") return;
+    const squashed = Cause.squash(exit.cause) as { _tag?: string };
+    expect(squashed._tag).toBe("BoxError");
+  });
+
+  it("runs-live skips recording when ARTIFACTS_BUCKET is unset (gate, not crash)", async () => {
+    delete process.env.ARTIFACTS_BUCKET;
+    await Effect.runPromise(
+      RunTrackerServiceLive.recordStage({
+        runId: "gate-test",
+        stage: "docDigest",
+        key: "gate/record",
+        status: "ok",
+        startedAt: new Date().toISOString(),
+      }),
+    );
   });
 });
