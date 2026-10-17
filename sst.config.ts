@@ -175,8 +175,16 @@ export default $config({
     // itself stays private), /dashboard serves the polling UI.
     const api = new sst.aws.ApiGatewayV2("Api");
     api.route("GET /health", { handler: "src/functions/api.handler" });
-    api.route("GET /runs", { handler: "src/functions/runs.handler", link: [artifacts] });
-    api.route("GET /artifacts", { handler: "src/functions/artifact.handler", link: [artifacts] });
+    api.route("GET /runs", {
+      handler: "src/functions/runs.handler",
+      link: [artifacts],
+      environment: { ARTIFACTS_BUCKET: artifacts.name },
+    });
+    api.route("GET /artifacts", {
+      handler: "src/functions/artifact.handler",
+      link: [artifacts],
+      environment: { ARTIFACTS_BUCKET: artifacts.name },
+    });
     api.route("GET /dashboard", { handler: "src/functions/dashboard.handler" });
 
     return {
