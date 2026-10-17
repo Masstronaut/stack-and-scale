@@ -1,5 +1,17 @@
 # stack-and-scale
 
+## The Renewer — local interface prototype
+
+Run `node src/renewal/server.ts` and open <http://127.0.0.1:4317>.
+Five minimal customer rows lead to an email preview and a separate approval step.
+Live Box/Bedrock execution is disabled by default; the optional design preview is
+explicitly anonymous fixture data, not actual AI-selected Box customers. Sending,
+Box writes, and deployment are disabled in this prototype. The original SQS
+workers below remain stubbed. See [local demo and limitations](docs/LOCAL-DEMO.md)
+and the [updated implementation plan](docs/COMMAND-CENTER-PLAN.md).
+
+Run dependency-free tests with `node --test scripts/test-renewer.ts`.
+
 ## The Renewer dataset
 
 The approved Box library and teammate retrieval/security guidance are indexed in

@@ -5,6 +5,8 @@
   "description": "SST + AWS job pipeline: SQS queue, SES email, Box file pulls, API Gateway health check",
   "type": "module",
   "scripts": {
+    "renewer": "node src/renewal/server.ts",
+    "test:renewer": "node --test scripts/test-renewer.ts",
     "dev": "sst dev",
     "server": "node --env-file=.env src/server.ts",
     "check": "vp check",
