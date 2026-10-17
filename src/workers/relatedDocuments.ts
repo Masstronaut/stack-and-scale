@@ -1,5 +1,5 @@
 import { Data, Effect, Result } from "effect";
-import type { RelatedDocumentsJob } from "../jobs/messages.ts";
+import type { DocDigestJob, RelatedDocumentsJob } from "../jobs/messages.ts";
 import { BoxService } from "../services/box.ts";
 import { BoxServiceLive } from "../services/box-live.ts";
 import {
@@ -21,9 +21,9 @@ import { createSqsWorker, parseJson, withRunTracking } from "./runner.ts";
 // Worker for issue #3: identify documents related to a customer contract.
 //
 // input:  RelatedDocumentsJob { contractFileId, runId? } (from worker #2)
-// output: one SalesNotesJob { contractFileId, relevantDocumentIds, runId }
-//         for worker #4; the queue message is the only artifact (no box
-//         writes). The runId threads the pass together for run tracking.
+// output: one DocDigestJob { contractFileId, relevantDocumentIds, runId }
+//         for the docDigest stage; the queue message is the only artifact
+//         (no box writes).
 //
 // Manifest-first (see docs/dataset/WORKERS.md): the contract is resolved by
 // exact manifest id - a CUAD original resolves to its mapped customer with
@@ -150,13 +150,14 @@ const analyze = (job: RelatedDocumentsJob, boxManifest: BoxManifest) =>
       sharedIds = selected.success;
     }
 
-    // Step 4: hand the union to the sales notes worker.
+    // Step 4: hand the union to the docDigest worker (which compresses the
+    // documents before salesNotes sees them).
     const relevantDocumentIds = [...baseline.map((entry) => entry.fileId), ...sharedIds];
     yield* queues.enqueue({
       contractFileId: job.contractFileId,
       relevantDocumentIds,
       runId: job.runId,
-    });
+    } satisfies DocDigestJob);
 
     return {
       contractFileId: job.contractFileId,

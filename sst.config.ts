@@ -49,8 +49,9 @@ export default $config({
       },
     );
 
-    // Worker queues for the document pipeline (issues #2-#5). One queue per
-    // worker keeps retries/DLQs isolated per pipeline stage.
+    // Worker queues for the document pipeline (issues #2-#5 plus the
+    // docDigest compression stage between relatedDocuments and salesNotes).
+    // One queue per worker keeps retries/DLQs isolated per pipeline stage.
     // TODO: link an `LLM_API_KEY` sst.Secret to the workers once an LLM
     // provider is chosen (issues #3-#5).
     //
@@ -60,8 +61,8 @@ export default $config({
     // notes, the slides worker uploads the generated deck. Both roots are
     // configurable per stage and default to the box root folder ("0");
     // generated notes land in BOX_OUTPUT_FOLDER_ID when set, defaulting to
-    // the scan root. relatedDocuments gets the same root for read-only
-    // contract text reads and never writes box.
+    // the scan root. relatedDocuments and docDigest get the same root for
+    // read-only contract text reads and never write box.
     //
     // Run tracking + artifacts share one private S3 bucket: workers PUT
     // stage records under `runs/<runId>/` and outputs under `artifacts/...`
@@ -88,12 +89,17 @@ export default $config({
       readonly dlq: string;
       readonly handler: string;
       readonly environment?: Record<string, string>;
+      /** Function timeout; defaults to "300 seconds". */
+      readonly timeout?: string;
     }
     const workerDefs: WorkerDef[] = [
       {
         queue: "ContractScannerQueue",
         dlq: "ContractScannerDLQ",
         handler: "src/workers/contractScanner.handler",
+        // One scan job processes all 24 contracts sequentially (metadata
+        // reads + LLM date extraction each) - 300s is not enough.
+        timeout: "900 seconds",
         environment: {
           BOX_WRITE_ENABLED: "true",
           BOX_ROOT_FOLDER_ID: boxRootFolderId,
@@ -104,6 +110,15 @@ export default $config({
         queue: "RelatedDocumentsQueue",
         dlq: "RelatedDocumentsDLQ",
         handler: "src/workers/relatedDocuments.handler",
+        environment: {
+          BOX_ROOT_FOLDER_ID: boxRootFolderId,
+          ARTIFACTS_BUCKET: artifacts.name,
+        },
+      },
+      {
+        queue: "DocDigestQueue",
+        dlq: "DocDigestDLQ",
+        handler: "src/workers/docDigest.handler",
         environment: {
           BOX_ROOT_FOLDER_ID: boxRootFolderId,
           ARTIFACTS_BUCKET: artifacts.name,
@@ -146,7 +161,8 @@ export default $config({
     // enqueues to, so its function can read `Resource.<QueueName>.url`.
     const downstreamQueues: Record<string, string[]> = {
       ContractScannerQueue: ["RelatedDocumentsQueue"],
-      RelatedDocumentsQueue: ["SalesNotesQueue"],
+      RelatedDocumentsQueue: ["DocDigestQueue"],
+      DocDigestQueue: ["SalesNotesQueue"],
       SalesNotesQueue: ["SalesSlidesQueue"],
       SalesSlidesQueue: [],
     };
@@ -154,7 +170,7 @@ export default $config({
       workerQueues[def.queue].subscribe(
         {
           handler: def.handler,
-          timeout: "300 seconds",
+          timeout: def.timeout ?? "300 seconds",
           environment: { ...llmEnvironment, ...def.environment },
           permissions: llmPermissions,
           link: [
@@ -191,6 +207,7 @@ export default $config({
       api: api.url,
       contractScannerQueue: workerQueues["ContractScannerQueue"].url,
       relatedDocumentsQueue: workerQueues["RelatedDocumentsQueue"].url,
+      docDigestQueue: workerQueues["DocDigestQueue"].url,
       salesNotesQueue: workerQueues["SalesNotesQueue"].url,
       salesSlidesQueue: workerQueues["SalesSlidesQueue"].url,
     };

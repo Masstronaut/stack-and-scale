@@ -8,10 +8,12 @@ import type { JobQueueServiceShape } from "./jobs.ts";
 const sqs = new SQSClient({});
 
 // Jobs are discriminated by their distinct fields; check the most specific
-// first (sales slides carry every field the earlier stages have).
+// first (salesNotes carries digestKey, docDigest carries only the doc ids,
+// and salesSlides carries every field the earlier stages have).
 const queueUrl = (job: PipelineJob): string => {
   if ("salesNotesFileId" in job) return Resource.SalesSlidesQueue.url;
-  if ("relevantDocumentIds" in job) return Resource.SalesNotesQueue.url;
+  if ("digestKey" in job) return Resource.SalesNotesQueue.url;
+  if ("relevantDocumentIds" in job) return Resource.DocDigestQueue.url;
   if ("contractFileId" in job) return Resource.RelatedDocumentsQueue.url;
   return Resource.ContractScannerQueue.url;
 };

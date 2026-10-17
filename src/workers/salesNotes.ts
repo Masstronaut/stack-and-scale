@@ -20,22 +20,27 @@ import { createSqsWorker, parseJson, withRunTracking } from "./runner.ts";
 
 // Worker for issue #4: generate a sales notes document.
 //
-// input:  SalesNotesJob { contractFileId, relevantDocumentIds, runId? }
-//         (from worker #3)
+// input:  SalesNotesJob { contractFileId, relevantDocumentIds, digestKey?,
+//         runId? } (from docDigest)
 // output: grounded markdown sales notes uploaded to box as
 //         "Sales Notes <customer>.md", the same notes stored as the run
 //         artifact `artifacts/<contractFileId>/sales-notes.md`, plus one
 //         SalesSlidesJob for worker #5 carrying the runId through.
 //
+// Primary context is the docDigest artifact when `digestKey` is set: the
+// compact per-document digest blocks replace the full extracted texts and
+// keep the prompt within LLM input-token limits (the related documents are
+// NOT re-read in that case). An empty/absent digestKey (legacy jobs, or the
+// artifact bucket gate was off) falls back to reading the documents
+// directly, best-effort. A failed digest read falls back the same way.
+//
 // Manifest-first (see docs/dataset/WORKERS.md): the contract resolves by
 // exact manifest id - unknown or customer-less ids fail so they dead-letter.
-// Related documents are read best-effort: an unreadable document is logged
-// and skipped so the notes stay grounded in what WAS read. The notes LLM
-// call is the core output, so its failure is fatal to the job. Uploads are
-// gated behind BOX_WRITE_ENABLED === "true"; with the gate off the notes are
-// only logged and the slides job carries an empty salesNotesFileId, which
-// worker #5 treats as "no notes file - derive talking points directly from
-// contract + related docs".
+// The notes LLM call is the core output, so its failure is fatal to the job.
+// Uploads are gated behind BOX_WRITE_ENABLED === "true"; with the gate off
+// the notes are only logged and the slides job carries an empty
+// salesNotesFileId, which worker #5 treats as "no notes file - derive
+// talking points directly from contract + related docs".
 
 /** Raised when contractFileId has no single customer-scoped manifest match. */
 class ContractResolutionError extends Data.TaggedError("ContractResolutionError")<{
@@ -69,7 +74,7 @@ Primary contract:
 [${contract.label}]
 ${contract.text}
 
-Related documents:
+Context documents:
 ${contextDocuments
   .map((document) => `[${document.label}]\n${document.text}`)
   .join(
@@ -99,23 +104,42 @@ const draft = (job: SalesNotesJob, boxManifest: BoxManifest) =>
     // notes, so that failure propagates.
     const contractText = yield* box.getFileText(contract.box_file_id);
 
-    // Step 3: read the related documents best-effort. One unreadable
-    // document is logged and skipped; the notes stay grounded in what WAS
-    // read.
-    const contextDocuments: ContextDocument[] = [
+    // Step 3: gather the context. With a digestKey the docDigest artifact is
+    // the PRIMARY context and the related documents are NOT re-read (that is
+    // the whole point - the full texts do not fit in the prompt). Empty key
+    // or a failed digest read falls back to the legacy direct reads.
+    let contextDocuments: ContextDocument[] = [
       { label: citationLabel(contract), text: contractText },
     ];
     const failedDocumentIds: string[] = [];
-    for (const fileId of job.relevantDocumentIds) {
-      const document = findDocumentByFileId(boxManifest, fileId);
-      const label = document === undefined ? fallbackLabel(fileId) : citationLabel(document);
-      const text = yield* Effect.result(box.getFileText(fileId));
-      if (Result.isFailure(text)) {
-        console.warn(`sales notes: skipping unreadable document ${fileId}`, text.failure);
-        failedDocumentIds.push(fileId);
-        continue;
+    let digestUsed = false;
+    if (job.digestKey !== undefined && job.digestKey !== "") {
+      const digest = yield* Effect.result(artifacts.getArtifact(job.digestKey));
+      if (Result.isFailure(digest)) {
+        console.warn(
+          `sales notes: digest read failed for ${job.digestKey}, falling back to direct document reads`,
+          digest.failure,
+        );
+      } else {
+        contextDocuments = [
+          ...contextDocuments,
+          { label: "DOCUMENT DIGESTS", text: digest.success },
+        ];
+        digestUsed = true;
       }
-      contextDocuments.push({ label, text: text.success });
+    }
+    if (!digestUsed) {
+      for (const fileId of job.relevantDocumentIds) {
+        const document = findDocumentByFileId(boxManifest, fileId);
+        const label = document === undefined ? fallbackLabel(fileId) : citationLabel(document);
+        const text = yield* Effect.result(box.getFileText(fileId));
+        if (Result.isFailure(text)) {
+          console.warn(`sales notes: skipping unreadable document ${fileId}`, text.failure);
+          failedDocumentIds.push(fileId);
+          continue;
+        }
+        contextDocuments = [...contextDocuments, { label, text: text.success }];
+      }
     }
 
     // Step 4: draft the notes in one LLM call. Failure here is fatal - the
@@ -155,6 +179,8 @@ const draft = (job: SalesNotesJob, boxManifest: BoxManifest) =>
       contractFileId: job.contractFileId,
       customerId: contract.customer_id,
       customerName,
+      digestKey: job.digestKey ?? "",
+      digestUsed,
       notesFileName,
       salesNotesFileId,
       failedDocumentIds,

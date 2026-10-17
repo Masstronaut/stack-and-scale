@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { SQSEvent, SQSHandler } from "aws-lambda";
 import { Effect } from "effect";
 import type {
+  DocDigestJob,
   PipelineJob,
   RelatedDocumentsJob,
   SalesNotesJob,
@@ -14,7 +15,7 @@ import {
   type ArtifactsServiceShape,
 } from "../src/services/artifacts.ts";
 import { BoxService, type BoxServiceShape, type FileRef } from "../src/services/box.ts";
-import { BoxError, LlmError, RunsError } from "../src/services/errors.ts";
+import { ArtifactsError, BoxError, LlmError, RunsError } from "../src/services/errors.ts";
 import { JobQueueService, type JobQueueServiceShape } from "../src/services/jobs.ts";
 import { RunTrackerServiceLive } from "../src/services/runs-live.ts";
 import {
@@ -36,6 +37,7 @@ import * as artifactRoute from "../src/functions/artifact.ts";
 import * as dashboardRoute from "../src/functions/dashboard.ts";
 import * as runsRoute from "../src/functions/runs.ts";
 import * as contractScanner from "../src/workers/contractScanner.ts";
+import * as docDigest from "../src/workers/docDigest.ts";
 import * as relatedDocuments from "../src/workers/relatedDocuments.ts";
 import * as salesNotes from "../src/workers/salesNotes.ts";
 import * as salesSlides from "../src/workers/salesSlides.ts";
@@ -323,6 +325,27 @@ const makeRelatedLlmFake = (options: RelatedLlmFakeOptions = {}) => {
   return { llm, calls };
 };
 
+const makeArtifactsFake = (
+  options: { readonly digest?: string; readonly failDigest?: boolean } = {},
+) => {
+  const puts: { key: string; content: string | Uint8Array; contentType: string }[] = [];
+  const digestReads: string[] = [];
+  const artifacts: ArtifactsServiceShape = {
+    putArtifact: (key, content, contentType) =>
+      Effect.sync(() => {
+        puts.push({ key, content, contentType });
+        return { key, bucket: "fake-bucket" };
+      }),
+    getArtifact: (key) => {
+      digestReads.push(key);
+      return options.failDigest === true
+        ? Effect.fail(new ArtifactsError({ cause: new Error(`artifact ${key} is gone`) }))
+        : Effect.succeed(options.digest ?? "DIGEST CONTENT [PROFILE: D1-PROFILE.pdf]");
+    },
+  };
+  return { artifacts, puts, digestReads };
+};
+
 const runRelated = (
   job: RelatedDocumentsJob,
   box: BoxServiceShape,
@@ -363,17 +386,26 @@ const runNotes = (
       ),
   );
 
-const makeArtifactsFake = () => {
-  const puts: { key: string; content: string | Uint8Array; contentType: string }[] = [];
-  const artifacts: ArtifactsServiceShape = {
-    putArtifact: (key, content, contentType) =>
-      Effect.sync(() => {
-        puts.push({ key, content, contentType });
-        return { key, bucket: "fake-bucket" };
-      }),
-  };
-  return { artifacts, puts };
-};
+const runDigest = (
+  job: DocDigestJob,
+  box: BoxServiceShape,
+  llm: LlmServiceShape,
+  queues: JobQueueServiceShape,
+  artifacts: ArtifactsServiceShape,
+  boxManifest: BoxManifest = relatedManifest,
+  runs: RunTrackerServiceShape = RunTrackerServiceStub,
+) =>
+  Effect.runPromise(
+    docDigest
+      .processJob(job, boxManifest)
+      .pipe(
+        Effect.provideService(BoxService, box),
+        Effect.provideService(LlmService, llm),
+        Effect.provideService(JobQueueService, queues),
+        Effect.provideService(ArtifactsService, artifacts),
+        Effect.provideService(RunTrackerService, runs),
+      ),
+  );
 
 const runSlides = (
   job: SalesSlidesJob,
@@ -670,6 +702,8 @@ describe("workers", () => {
       "OBLIGATIONS: delivery & service obligations",
     ]);
     expect(result.relevantDocumentIds).toEqual(RELATED_BASELINE_IDS);
+    // the handoff is a DocDigestJob for the new stage, not a SalesNotesJob
+    expect("digestKey" in enqueued[0]).toBe(false);
     expect(enqueued).toEqual([
       { contractFileId: "agr-1", relevantDocumentIds: RELATED_BASELINE_IDS },
     ]);
@@ -1034,7 +1068,7 @@ describe("workers", () => {
     expect(result.batchItemFailures).toEqual([{ itemIdentifier: "msg-0" }]);
   });
 
-  it("threads one runId through all three enqueue hops (#2-#5)", async () => {
+  it("threads one runId through all four enqueue hops (#2-#5)", async () => {
     await withEnv({ BOX_WRITE_ENABLED: "true" }, async () => {
       const { box } = makeBoxFake({ files: [] });
       const { llm } = makeRelatedLlmFake({
@@ -1050,19 +1084,25 @@ describe("workers", () => {
       expect(relatedJob.contractFileId).toBe("agr-1");
       expect(typeof relatedJob.runId).toBe("string");
 
-      // worker #3 forwards it to the notes job
+      // worker #3 forwards it to the digest job
       await runRelated(relatedJob, box, llm, queues);
-      const notesJob = enqueued[1] as SalesNotesJob;
+      const digestJob = enqueued[1] as DocDigestJob;
+      expect(digestJob.runId).toBe(relatedJob.runId);
+
+      // docDigest forwards it (plus the digest key) to the notes job
+      await runDigest(digestJob, box, llm, queues, artifacts);
+      const notesJob = enqueued[2] as SalesNotesJob;
       expect(notesJob.runId).toBe(relatedJob.runId);
+      expect(notesJob.digestKey).toBe("artifacts/agr-1/doc-digest.md");
 
       // worker #4 forwards it to the slides job
       await runNotes(notesJob, box, llm, queues);
-      const slidesJob = enqueued[2] as SalesSlidesJob;
+      const slidesJob = enqueued[3] as SalesSlidesJob;
       expect(slidesJob.runId).toBe(relatedJob.runId);
 
       // worker #5 is the terminal stage
       await runSlides(slidesJob, box, llm, artifacts);
-      expect(enqueued).toHaveLength(3);
+      expect(enqueued).toHaveLength(4);
     });
   });
 
@@ -1114,6 +1154,23 @@ describe("workers", () => {
         ["relatedDocuments", "agr-1/relatedDocuments", "running"],
         ["relatedDocuments", "agr-1/relatedDocuments", "ok"],
       ]);
+
+      // docDigest: one record per contract, listing the digest artifact
+      const digestTracking = makeRunsFake();
+      await runDigest(
+        { contractFileId: "agr-1", relevantDocumentIds: ["prof-1"], runId: "run-1" },
+        box,
+        llm,
+        queues,
+        artifacts,
+        relatedManifest,
+        digestTracking.runs,
+      );
+      expect(digestTracking.records.map((r) => [r.stage, r.key, r.status])).toEqual([
+        ["docDigest", "agr-1/docDigest", "running"],
+        ["docDigest", "agr-1/docDigest", "ok"],
+      ]);
+      expect(digestTracking.records[1]!.artifactKeys).toEqual(["artifacts/agr-1/doc-digest.md"]);
 
       // worker #4: notes record lists the notes artifact
       const notesTracking = makeRunsFake();
@@ -1199,6 +1256,230 @@ describe("workers", () => {
       expect(puts[0]!.key).toBe("artifacts/agr-1/sales-notes.md");
       expect(puts[0]!.contentType).toBe("text/markdown");
       expect(puts[0]!.content).toContain("Acme renews.");
+    });
+  });
+
+  const DIGEST_JOB: DocDigestJob = {
+    contractFileId: "agr-1",
+    relevantDocumentIds: RELATED_BASELINE_IDS,
+    runId: "run-1",
+  };
+
+  it("extracts one digest block per document and enqueues the notes job with the digest key", async () => {
+    await withEnv({ BOX_WRITE_ENABLED: "true" }, async () => {
+      const { box } = makeBoxFake({ files: [] });
+      const { llm, calls } = makeRelatedLlmFake({
+        reply: "- asks: none [USAGE: D1-USAGE.pdf]",
+      });
+      const { queues, enqueued } = makeQueueFake();
+      const { artifacts, puts } = makeArtifactsFake();
+
+      const result = await runDigest(DIGEST_JOB, box, llm, queues, artifacts);
+
+      // one extraction LLM call per readable document
+      expect(calls).toHaveLength(RELATED_BASELINE_IDS.length);
+      expect(calls[0]).toContain("text of prof-1");
+      expect(calls[0]).toContain("PROFILE: D1-PROFILE.pdf"); // citation label in prompt
+      expect(calls[4]).toContain("text of ucsv-1");
+
+      // digest artifact with header + per-document blocks
+      expect(puts).toHaveLength(1);
+      expect(puts[0]!.key).toBe("artifacts/agr-1/doc-digest.md");
+      expect(puts[0]!.contentType).toBe("text/markdown");
+      const digest = puts[0]!.content as string;
+      expect(digest).toContain("# Document digests - Acme (REN-C1)");
+      expect(digest).toContain("AGREEMENT: D1-AGREEMENT.pdf (file id agr-1)"); // contract reference
+      expect(digest).toContain("## USAGE: D1-USAGE.pdf (file id usage-1)");
+      expect(digest).toContain("Generated: ");
+
+      expect(result.digestKey).toBe("artifacts/agr-1/doc-digest.md");
+      expect(result.failedDocumentIds).toEqual([]);
+      expect(enqueued).toEqual([
+        {
+          contractFileId: "agr-1",
+          relevantDocumentIds: RELATED_BASELINE_IDS,
+          digestKey: "artifacts/agr-1/doc-digest.md",
+          runId: "run-1",
+        },
+      ]);
+    });
+  });
+
+  it("keeps digesting when some documents are unreadable and hands over the rest", async () => {
+    const { box } = makeBoxFake({ files: [], failFileText: ["mail-1", "usage-1"] });
+    const { llm, calls } = makeRelatedLlmFake({ reply: "- asks: escalated [EMAILS: mail.pdf]" });
+    const { queues, enqueued } = makeQueueFake();
+    const { artifacts, puts } = makeArtifactsFake();
+
+    const result = await runDigest(DIGEST_JOB, box, llm, queues, artifacts);
+
+    expect(calls).toHaveLength(RELATED_BASELINE_IDS.length - 2); // skips failed reads
+    expect(result.failedDocumentIds).toEqual(["mail-1", "usage-1"]);
+    expect(result.digestKey).toBe("artifacts/agr-1/doc-digest.md");
+    expect(puts[0]!.content).not.toContain("file id mail-1"); // grounded in what WAS read
+    expect(enqueued[0]).toMatchObject({ digestKey: "artifacts/agr-1/doc-digest.md" });
+  });
+
+  it("fails the job when every document fails", async () => {
+    const { box } = makeBoxFake({ files: [], failFileText: RELATED_BASELINE_IDS });
+    const { llm, calls } = makeRelatedLlmFake();
+    const { queues, enqueued } = makeQueueFake();
+    const { artifacts, puts } = makeArtifactsFake();
+
+    await expect(runDigest(DIGEST_JOB, box, llm, queues, artifacts)).rejects.toMatchObject({
+      _tag: "BoxError",
+    });
+    expect(calls).toHaveLength(0);
+    expect(puts).toEqual([]);
+    expect(enqueued).toEqual([]);
+  });
+
+  it("fails the job for unresolvable contractFileIds", async () => {
+    const { box } = makeBoxFake({ files: [] });
+    const { llm } = makeRelatedLlmFake();
+    const { queues, enqueued } = makeQueueFake();
+    const { artifacts, puts } = makeArtifactsFake();
+
+    await expect(
+      runDigest(
+        { contractFileId: "unknown-file", relevantDocumentIds: [], runId: "run-1" },
+        box,
+        llm,
+        queues,
+        artifacts,
+      ),
+    ).rejects.toMatchObject({ _tag: "ContractResolutionError", contractFileId: "unknown-file" });
+    // shared docs are customer-less and cannot be resolved as contracts
+    await expect(
+      runDigest(
+        { contractFileId: "cat-1", relevantDocumentIds: [], runId: "run-1" },
+        box,
+        llm,
+        queues,
+        artifacts,
+      ),
+    ).rejects.toMatchObject({ _tag: "ContractResolutionError" });
+    expect(puts).toEqual([]);
+    expect(enqueued).toEqual([]);
+
+    // through the live handler the failure becomes a batch item failure
+    const result = await run(
+      docDigest.handler,
+      JSON.stringify({ contractFileId: "unknown-file", relevantDocumentIds: [] }),
+    );
+    expect(result.batchItemFailures).toEqual([{ itemIdentifier: "msg-0" }]);
+  });
+
+  it("enqueues an empty digestKey when the artifact sink is disabled", async () => {
+    // bucket gate off: putArtifact still runs but reports an empty bucket,
+    // so nothing can be handed to the notes worker
+    const gatedArtifacts: ArtifactsServiceShape = {
+      putArtifact: (key, content, contentType) =>
+        Effect.sync(() => {
+          void content;
+          void contentType;
+          return { key, bucket: "" };
+        }),
+      getArtifact: () => Effect.fail(new ArtifactsError({ cause: new Error("no bucket") })),
+    };
+    const { box } = makeBoxFake({ files: [] });
+    const { llm } = makeRelatedLlmFake({ reply: "- asks: none" });
+    const { queues, enqueued } = makeQueueFake();
+
+    const result = await runDigest(DIGEST_JOB, box, llm, queues, gatedArtifacts);
+
+    expect(result.digestKey).toBe("");
+    expect(enqueued).toEqual([
+      {
+        contractFileId: "agr-1",
+        relevantDocumentIds: RELATED_BASELINE_IDS,
+        digestKey: "",
+        runId: "run-1",
+      },
+    ]);
+  });
+
+  it("uses the digest as primary context and skips re-reading the related documents", async () => {
+    await withEnv({ BOX_WRITE_ENABLED: "true" }, async () => {
+      const { box } = makeBoxFake({ files: [] });
+      const { llm, calls } = makeRelatedLlmFake({ reply: "## Citations\n- [USAGE: D1-USAGE.pdf]" });
+      const { queues } = makeQueueFake();
+      const { artifacts, puts, digestReads } = makeArtifactsFake({
+        digest: "- asks: cheaper tier [PROFILE: D1-PROFILE.pdf]",
+      });
+
+      const result = await runNotes(
+        {
+          contractFileId: "agr-1",
+          relevantDocumentIds: RELATED_BASELINE_IDS,
+          digestKey: "artifacts/agr-1/doc-digest.md",
+          runId: "run-1",
+        },
+        box,
+        llm,
+        queues,
+        relatedManifest,
+        artifacts,
+      );
+
+      expect(digestReads).toEqual(["artifacts/agr-1/doc-digest.md"]);
+      expect(calls).toHaveLength(1); // one notes prompt
+      expect(calls[0]).toContain("DOCUMENT DIGESTS");
+      expect(calls[0]).toContain("- asks: cheaper tier [PROFILE: D1-PROFILE.pdf]");
+      expect(calls[0]).toContain("text of agr-1"); // contract text still primary
+      expect(calls[0]).not.toContain("text of prof-1"); // related docs NOT re-read
+      expect(result.digestUsed).toBe(true);
+      expect(puts.map((put) => put.key)).toEqual(["artifacts/agr-1/sales-notes.md"]);
+    });
+  });
+
+  it("falls back to direct document reads when the digest cannot be read", async () => {
+    await withEnv({ BOX_WRITE_ENABLED: "true" }, async () => {
+      const { box } = makeBoxFake({ files: [] });
+      const { llm, calls } = makeRelatedLlmFake({ reply: "## Citations\n- none" });
+      const { queues } = makeQueueFake();
+      const { artifacts, digestReads } = makeArtifactsFake({ failDigest: true });
+
+      const result = await runNotes(
+        {
+          contractFileId: "agr-1",
+          relevantDocumentIds: ["prof-1"],
+          digestKey: "artifacts/agr-1/doc-digest.md",
+          runId: "run-1",
+        },
+        box,
+        llm,
+        queues,
+        relatedManifest,
+        artifacts,
+      );
+
+      expect(digestReads).toEqual(["artifacts/agr-1/doc-digest.md"]);
+      expect(calls[0]).not.toContain("DOCUMENT DIGESTS");
+      expect(calls[0]).toContain("text of prof-1"); // legacy direct read
+      expect(result.digestUsed).toBe(false);
+    });
+  });
+
+  it("keeps the legacy direct-read path when no digestKey is set", async () => {
+    await withEnv({ BOX_WRITE_ENABLED: "true" }, async () => {
+      const { box } = makeBoxFake({ files: [] });
+      const { llm, calls } = makeRelatedLlmFake({ reply: "## Citations\n- none" });
+      const { queues } = makeQueueFake();
+      const { artifacts, digestReads } = makeArtifactsFake();
+
+      const result = await runNotes(
+        { contractFileId: "agr-1", relevantDocumentIds: ["prof-1"], runId: "run-1" },
+        box,
+        llm,
+        queues,
+        relatedManifest,
+        artifacts,
+      );
+
+      expect(digestReads).toEqual([]); // never consulted
+      expect(calls[0]).toContain("text of prof-1");
+      expect(result.digestUsed).toBe(false);
     });
   });
 

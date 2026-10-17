@@ -18,6 +18,9 @@ export interface ArtifactsServiceShape {
     content: string | Uint8Array,
     contentType: string,
   ) => Effect.Effect<ArtifactRef, ArtifactsError>;
+
+  /** Read a stored artifact back as text (e.g. the docDigest handoff). */
+  readonly getArtifact: (key: string) => Effect.Effect<string, ArtifactsError>;
 }
 
 export class ArtifactsService extends Context.Service<ArtifactsService, ArtifactsServiceShape>()(
@@ -31,4 +34,5 @@ export class ArtifactsService extends Context.Service<ArtifactsService, Artifact
  */
 export const ArtifactsServiceStub: ArtifactsServiceShape = {
   putArtifact: (key) => Effect.succeed({ key, bucket: "stub-bucket" }),
+  getArtifact: () => Effect.succeed("stub artifact"),
 };

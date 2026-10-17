@@ -1,4 +1,4 @@
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { Effect } from "effect";
 import type { ArtifactRef, ArtifactsServiceShape } from "./artifacts.ts";
 import { ArtifactsError } from "./errors.ts";
@@ -28,6 +28,27 @@ export const ArtifactsServiceLive: ArtifactsServiceShape = {
             }),
           );
           return { key, bucket } satisfies ArtifactRef;
+        },
+        catch: (cause) => new ArtifactsError({ cause }),
+      });
+    }),
+
+  getArtifact: (key) =>
+    Effect.suspend(() => {
+      const bucket = bucketName();
+      if (bucket === "") {
+        return Effect.fail(
+          new ArtifactsError({
+            cause: new Error(`ARTIFACTS_BUCKET is not set, cannot read ${key}`),
+          }),
+        );
+      }
+      return Effect.tryPromise({
+        try: async () => {
+          const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+          const body = await response.Body?.transformToString();
+          if (body === undefined) throw new Error(`artifact ${key} returned no body`);
+          return body;
         },
         catch: (cause) => new ArtifactsError({ cause }),
       });

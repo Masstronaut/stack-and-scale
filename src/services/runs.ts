@@ -2,7 +2,13 @@ import { Context, Effect } from "effect";
 import type { RunsError } from "./errors.ts";
 
 /** The pipeline stages that emit run records, in pipeline order. */
-export const STAGES = ["contractScanner", "relatedDocuments", "salesNotes", "salesSlides"] as const;
+export const STAGES = [
+  "contractScanner",
+  "relatedDocuments",
+  "docDigest",
+  "salesNotes",
+  "salesSlides",
+] as const;
 
 export type StageName = (typeof STAGES)[number];
 export type StageStatus = "running" | "ok" | "failed";
