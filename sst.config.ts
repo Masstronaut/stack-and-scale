@@ -53,11 +53,26 @@ export default $config({
     // worker keeps retries/DLQs isolated per pipeline stage.
     // TODO: link an `LLM_API_KEY` sst.Secret to the workers once an LLM
     // provider is chosen (issues #3-#5).
-    const workerDefs = [
+    //
+    // The contract scanner is the only stage allowed to write box metadata
+    // (BOX_WRITE_ENABLED); its scan root is configurable per stage and
+    // defaults to the box root folder ("0").
+    const boxRootFolderId = process.env.BOX_ROOT_FOLDER_ID ?? "0";
+    interface WorkerDef {
+      readonly queue: string;
+      readonly dlq: string;
+      readonly handler: string;
+      readonly environment?: Record<string, string>;
+    }
+    const workerDefs: WorkerDef[] = [
       {
         queue: "ContractScannerQueue",
         dlq: "ContractScannerDLQ",
         handler: "src/workers/contractScanner.handler",
+        environment: {
+          BOX_WRITE_ENABLED: "true",
+          BOX_ROOT_FOLDER_ID: boxRootFolderId,
+        },
       },
       {
         queue: "RelatedDocumentsQueue",
@@ -76,22 +91,38 @@ export default $config({
       },
     ];
 
-    const workerQueues: Record<string, string> = {};
+    const workerQueues: Record<string, sst.aws.Queue> = {};
     for (const def of workerDefs) {
       const deadLetterQueue = new sst.aws.Queue(def.dlq);
-      const workerQueue = new sst.aws.Queue(def.queue, {
+      workerQueues[def.queue] = new sst.aws.Queue(def.queue, {
         visibilityTimeout: "1800 seconds",
         dlq: { queue: deadLetterQueue.arn, retry: 3 },
       });
-      workerQueue.subscribe(
+    }
+
+    // Each worker links the queue of the downstream pipeline stage it
+    // enqueues to, so its function can read `Resource.<QueueName>.url`.
+    const downstreamQueues: Record<string, string[]> = {
+      ContractScannerQueue: ["RelatedDocumentsQueue"],
+      RelatedDocumentsQueue: ["SalesNotesQueue"],
+      SalesNotesQueue: ["SalesSlidesQueue"],
+      SalesSlidesQueue: [],
+    };
+    for (const def of workerDefs) {
+      workerQueues[def.queue].subscribe(
         {
           handler: def.handler,
           timeout: "300 seconds",
-          link: [boxClientId, boxClientSecret, boxEnterpriseId],
+          environment: def.environment,
+          link: [
+            boxClientId,
+            boxClientSecret,
+            boxEnterpriseId,
+            ...downstreamQueues[def.queue].map((name) => workerQueues[name]),
+          ],
         },
         { batch: { size: 1, partialResponses: true } },
       );
-      workerQueues[def.queue] = workerQueue.url;
     }
 
     // HTTP API with a health check endpoint for deployment/pipeline checks.
@@ -100,10 +131,10 @@ export default $config({
 
     return {
       api: api.url,
-      contractScannerQueue: workerQueues["ContractScannerQueue"],
-      relatedDocumentsQueue: workerQueues["RelatedDocumentsQueue"],
-      salesNotesQueue: workerQueues["SalesNotesQueue"],
-      salesSlidesQueue: workerQueues["SalesSlidesQueue"],
+      contractScannerQueue: workerQueues["ContractScannerQueue"].url,
+      relatedDocumentsQueue: workerQueues["RelatedDocumentsQueue"].url,
+      salesNotesQueue: workerQueues["SalesNotesQueue"].url,
+      salesSlidesQueue: workerQueues["SalesSlidesQueue"].url,
     };
   },
 });

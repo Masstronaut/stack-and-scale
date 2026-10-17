@@ -13,6 +13,11 @@ export interface BoxServiceShape {
   /** Plain-text extraction of a stored document (LLM-ready). */
   readonly getFileText: (fileId: string) => Effect.Effect<string, BoxError>;
 
+  /** The file's freeform metadata (box global "properties" template). */
+  readonly getFileMetadata: (
+    fileId: string,
+  ) => Effect.Effect<Readonly<Record<string, string>>, BoxError>;
+
   /** Merge key/value metadata into a file's existing box metadata. */
   readonly updateFileMetadata: (
     fileId: string,
@@ -42,6 +47,7 @@ export class BoxService extends Context.Service<BoxService, BoxServiceShape>()("
 export const BoxServiceStub: BoxServiceShape = {
   listAllFiles: () => Effect.succeed([]),
   getFileText: () => Effect.succeed(""),
+  getFileMetadata: () => Effect.succeed({}),
   updateFileMetadata: () => Effect.void,
   uploadFile: () => Effect.succeed({ fileId: "stub-file-id" }),
 };
