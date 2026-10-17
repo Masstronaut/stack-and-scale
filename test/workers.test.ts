@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { SQSEvent, SQSHandler } from "aws-lambda";
 import { Effect } from "effect";
-import type { PipelineJob, RelatedDocumentsJob } from "../src/jobs/messages.ts";
+import type { PipelineJob, RelatedDocumentsJob, SalesNotesJob } from "../src/jobs/messages.ts";
 import { BoxService, type BoxServiceShape, type FileRef } from "../src/services/box.ts";
 import { BoxError, LlmError } from "../src/services/errors.ts";
 import { JobQueueService, type JobQueueServiceShape } from "../src/services/jobs.ts";
@@ -55,6 +55,7 @@ interface BoxFakeOptions {
 
 const makeBoxFake = (options: BoxFakeOptions) => {
   const metadataWrites: { fileId: string; metadata: Record<string, string> }[] = [];
+  const uploads: { name: string; content: string }[] = [];
   const box: BoxServiceShape = {
     listAllFiles: () => Effect.succeed(options.files),
     getFileText: (fileId) =>
@@ -66,9 +67,13 @@ const makeBoxFake = (options: BoxFakeOptions) => {
       Effect.sync(() => {
         metadataWrites.push({ fileId, metadata: { ...metadata } });
       }),
-    uploadFile: (name) => Effect.succeed({ fileId: `uploaded-${name}` }),
+    uploadFile: (name, content) =>
+      Effect.sync(() => {
+        uploads.push({ name, content });
+        return { fileId: `uploaded-${name}` };
+      }),
   };
-  return { box, metadataWrites };
+  return { box, metadataWrites, uploads };
 };
 
 interface LlmFakeOptions {
@@ -300,6 +305,23 @@ const runRelated = (
 ) =>
   Effect.runPromise(
     relatedDocuments
+      .processJob(job, boxManifest)
+      .pipe(
+        Effect.provideService(BoxService, box),
+        Effect.provideService(LlmService, llm),
+        Effect.provideService(JobQueueService, queues),
+      ),
+  );
+
+const runNotes = (
+  job: SalesNotesJob,
+  box: BoxServiceShape,
+  llm: LlmServiceShape,
+  queues: JobQueueServiceShape,
+  boxManifest: BoxManifest = relatedManifest,
+) =>
+  Effect.runPromise(
+    salesNotes
       .processJob(job, boxManifest)
       .pipe(
         Effect.provideService(BoxService, box),
@@ -622,14 +644,139 @@ describe("workers", () => {
     ]);
   });
 
-  it("sales notes completes a job (#4)", async () => {
-    await runOk(
+  const NOTES_JOB: SalesNotesJob = {
+    contractFileId: "agr-1",
+    relevantDocumentIds: RELATED_BASELINE_IDS,
+  };
+
+  it("generates grounded notes, uploads them and enqueues the slides job (#4)", async () => {
+    await withEnv({ BOX_WRITE_ENABLED: "true" }, async () => {
+      const { box, uploads } = makeBoxFake({ files: [] });
+      const { llm, calls } = makeRelatedLlmFake({
+        reply:
+          "## Account context\nAcme is a long-standing customer. [PROFILE: D1-PROFILE.pdf]\n\n## Citations\n- [PROFILE: D1-PROFILE.pdf]",
+      });
+      const { queues, enqueued } = makeQueueFake();
+
+      const result = await runNotes(NOTES_JOB, box, llm, queues);
+
+      expect(calls).toHaveLength(1); // one notes prompt
+      expect(calls[0]).toContain("Acme"); // customer context
+      expect(calls[0]).toContain("AGREEMENT: D1-AGREEMENT.pdf"); // labeled primary contract
+      expect(calls[0]).toContain("text of agr-1"); // contract text read via box
+      expect(calls[0]).toContain("PROFILE: D1-PROFILE.pdf"); // labeled related doc
+      expect(calls[0]).toContain("text of ucsv-1"); // usage evidence included
+      expect(uploads).toHaveLength(1);
+      expect(uploads[0]!.name).toBe("Sales Notes Acme.md");
+      expect(uploads[0]!.content).toContain("## Citations");
+      expect(result.notesFileName).toBe("Sales Notes Acme.md");
+      expect(result.salesNotesFileId).toBe("uploaded-Sales Notes Acme.md");
+      expect(result.failedDocumentIds).toEqual([]);
+      expect(enqueued).toEqual([
+        {
+          contractFileId: "agr-1",
+          relevantDocumentIds: RELATED_BASELINE_IDS,
+          salesNotesFileId: "uploaded-Sales Notes Acme.md",
+        },
+      ]);
+    });
+  });
+
+  it("skips the upload when the write gate is off and enqueues an empty notes id (#4)", async () => {
+    await withEnv({ BOX_WRITE_ENABLED: undefined }, async () => {
+      const { box, uploads } = makeBoxFake({ files: [] });
+      const { llm, calls } = makeRelatedLlmFake({ reply: "## Citations\n- none" });
+      const { queues, enqueued } = makeQueueFake();
+
+      const result = await runNotes(NOTES_JOB, box, llm, queues);
+
+      expect(calls).toHaveLength(1); // notes are still drafted
+      expect(uploads).toEqual([]);
+      expect(result.salesNotesFileId).toBe("");
+      expect(enqueued).toEqual([
+        {
+          contractFileId: "agr-1",
+          relevantDocumentIds: RELATED_BASELINE_IDS,
+          salesNotesFileId: "",
+        },
+      ]);
+    });
+  });
+
+  it("still produces notes from the readable documents when one is unreadable (#4)", async () => {
+    await withEnv({ BOX_WRITE_ENABLED: "true" }, async () => {
+      const { box, uploads } = makeBoxFake({ files: [], failFileText: ["mail-1"] });
+      const { llm, calls } = makeRelatedLlmFake({
+        reply: "## Citations\n- [PROFILE: D1-PROFILE.pdf]",
+      });
+      const { queues, enqueued } = makeQueueFake();
+
+      const result = await runNotes(NOTES_JOB, box, llm, queues);
+
+      expect(result.failedDocumentIds).toEqual(["mail-1"]);
+      expect(calls[0]).toContain("text of agr-1");
+      expect(calls[0]).toContain("PROFILE: D1-PROFILE.pdf");
+      expect(calls[0]).not.toContain("text of mail-1"); // grounded in what WAS read
+      expect(uploads).toHaveLength(1);
+      expect(enqueued).toEqual([
+        {
+          contractFileId: "agr-1",
+          relevantDocumentIds: RELATED_BASELINE_IDS,
+          salesNotesFileId: "uploaded-Sales Notes Acme.md",
+        },
+      ]);
+    });
+  });
+
+  it("fails the job when the notes LLM call fails (#4)", async () => {
+    const { box, uploads } = makeBoxFake({ files: [] });
+    const { llm } = makeRelatedLlmFake({ fail: true });
+    const { queues, enqueued } = makeQueueFake();
+
+    await expect(runNotes(NOTES_JOB, box, llm, queues)).rejects.toMatchObject({
+      _tag: "LlmError",
+    });
+    expect(uploads).toEqual([]);
+    expect(enqueued).toEqual([]);
+  });
+
+  it("fails the job for unresolvable contractFileIds (#4)", async () => {
+    const { box } = makeBoxFake({ files: [] });
+    const { llm } = makeRelatedLlmFake();
+    const { queues, enqueued } = makeQueueFake();
+
+    await expect(
+      runNotes({ contractFileId: "unknown-file", relevantDocumentIds: [] }, box, llm, queues),
+    ).rejects.toMatchObject({ _tag: "ContractResolutionError", contractFileId: "unknown-file" });
+    // shared docs are customer-less and cannot be resolved as contracts
+    await expect(
+      runNotes({ contractFileId: "cat-1", relevantDocumentIds: [] }, box, llm, queues),
+    ).rejects.toMatchObject({ _tag: "ContractResolutionError" });
+    expect(enqueued).toEqual([]);
+
+    // through the live handler the failure becomes a batch item failure
+    const result = await run(
       salesNotes.handler,
-      JSON.stringify({
-        contractFileId: "contract-1",
-        relevantDocumentIds: ["doc-1", "doc-2"],
-      }),
+      JSON.stringify({ contractFileId: "unknown-file", relevantDocumentIds: [] }),
     );
+    expect(result.batchItemFailures).toEqual([{ itemIdentifier: "msg-0" }]);
+  });
+
+  it("falls back to the contract file id in the notes filename when the customer is unresolvable (#4)", async () => {
+    await withEnv({ BOX_WRITE_ENABLED: "true" }, async () => {
+      const { box, uploads } = makeBoxFake({ files: [] });
+      const { llm } = makeRelatedLlmFake({ reply: "notes" });
+      const { queues } = makeQueueFake();
+      const orphanManifest: BoxManifest = {
+        customers: [],
+        documents: [makeDoc("D1-AGREEMENT", "REN-C1", "AGREEMENT", "agr-1")],
+      };
+
+      const result = await runNotes(NOTES_JOB, box, llm, queues, orphanManifest);
+
+      expect(result.customerName).toBe("agr-1");
+      expect(uploads[0]!.name).toBe("Sales Notes agr-1.md");
+    });
   });
 
   it("sales slides completes a job (#5)", async () => {

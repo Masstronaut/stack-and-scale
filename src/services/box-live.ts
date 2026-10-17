@@ -18,6 +18,11 @@ const getClient = (): Promise<BoxClient> => (clientPromise ??= createBoxClient()
 
 const rootFolderId = () => process.env.BOX_ROOT_FOLDER_ID ?? "0";
 
+// Generated outputs (e.g. sales notes) land in their own folder when one is
+// configured, defaulting to the scan root.
+const outputFolderId = () =>
+  process.env.BOX_OUTPUT_FOLDER_ID ?? process.env.BOX_ROOT_FOLDER_ID ?? "0";
+
 const attempt = <A>(run: () => Promise<A>): Effect.Effect<A, BoxError> =>
   Effect.tryPromise({ try: run, catch: (cause) => new BoxError({ cause }) });
 
@@ -168,7 +173,7 @@ export const BoxServiceLive: BoxServiceShape = {
     attempt(async () => {
       const client = await getClient();
       const files = await client.uploads.uploadFile({
-        attributes: { name, parent: { id: rootFolderId() } },
+        attributes: { name, parent: { id: outputFolderId() } },
         file: stringToByteStream(content),
       });
       const fileId = files.entries?.[0]?.id;

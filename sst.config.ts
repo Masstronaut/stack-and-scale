@@ -54,11 +54,15 @@ export default $config({
     // TODO: link an `LLM_API_KEY` sst.Secret to the workers once an LLM
     // provider is chosen (issues #3-#5).
     //
-    // The contract scanner is the only stage allowed to write box metadata
-    // (BOX_WRITE_ENABLED); its scan root is configurable per stage and
-    // defaults to the box root folder ("0"). relatedDocuments gets the same
-    // root for read-only contract text reads and never writes box.
+    // The contract scanner and the sales notes worker are the stages allowed
+    // to write box (BOX_WRITE_ENABLED): the scanner stamps scan metadata, the
+    // notes worker uploads the generated notes. Both roots are configurable
+    // per stage and default to the box root folder ("0"); generated notes
+    // land in BOX_OUTPUT_FOLDER_ID when set, defaulting to the scan root.
+    // relatedDocuments gets the same root for read-only contract text reads
+    // and never writes box.
     const boxRootFolderId = process.env.BOX_ROOT_FOLDER_ID ?? "0";
+    const boxOutputFolderId = process.env.BOX_OUTPUT_FOLDER_ID ?? boxRootFolderId;
     interface WorkerDef {
       readonly queue: string;
       readonly dlq: string;
@@ -87,6 +91,11 @@ export default $config({
         queue: "SalesNotesQueue",
         dlq: "SalesNotesDLQ",
         handler: "src/workers/salesNotes.handler",
+        environment: {
+          BOX_WRITE_ENABLED: "true",
+          BOX_ROOT_FOLDER_ID: boxRootFolderId,
+          BOX_OUTPUT_FOLDER_ID: boxOutputFolderId,
+        },
       },
       {
         queue: "SalesSlidesQueue",
