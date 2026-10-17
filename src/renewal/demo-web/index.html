@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>The Renewer · Stack & Scale</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="masthead">
+      <a class="brand" href="/">↻ The Renewer</a><span class="wordmark">STACK & SCALE</span>
+    </header>
+    <main>
+      <h1>Renewal priorities, ready for review.</h1>
+      <p class="subtitle">
+        Two selected renewal priorities. Personalized, evidence-backed emails, ready for your
+        review.
+      </p>
+      <p id="status" role="status">Loading verified portfolio…</p>
+      <h2 class="list-label">Customer · Why prioritize</h2>
+      <section id="opportunities" aria-label="Top renewal opportunities"></section>
+      <p class="privacy">
+        Actual Box + Nova analysis of fictional customer scenarios. Cached, verified results. Public
+        demo is read-only. Email delivery is disabled on this webpage.
+      </p>
+    </main>
+    <footer><span>THE RENEWER</span><span>Powered by Box + Amazon Bedrock</span></footer>
+    <dialog id="preview" aria-labelledby="preview-title">
+      <div class="dialog-top">
+        <span class="eyebrow">EMAIL PREVIEW</span
+        ><button id="close-preview" class="icon-button" aria-label="Close email preview">×</button>
+      </div>
+      <h2 id="preview-title"></h2>
+      <p id="draft-status" role="status"></p>
+      <div id="draft-content" hidden>
+        <div class="email-meta subject">
+          <span>SUBJECT</span><strong id="email-subject"></strong>
+        </div>
+        <div id="email-body" class="email-body"></div>
+        <details>
+          <summary>Supporting Box evidence ↗</summary>
+          <div id="sources"></div>
+          <p id="verification-note" class="verification-note"></p>
+        </details>
+      </div>
+      <div class="dialog-bottom">
+        <p id="send-note">Preview only. Public email sending is disabled.</p>
+      </div>
+    </dialog>
+  </body>
+</html>
