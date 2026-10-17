@@ -1,22 +1,22 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
-import { Motion } from 'motion-v'
-import { onSlideEnter } from '@slidev/client'
+import { onMounted, onUnmounted, ref } from "vue";
+import { Motion } from "motion-v";
+import { onSlideEnter } from "@slidev/client";
 
-const shown = ref(false)
-let showTimer: ReturnType<typeof setTimeout> | undefined
+const shown = ref(false);
+let showTimer: ReturnType<typeof setTimeout> | undefined;
 
 function play() {
-  shown.value = false
-  if (showTimer) clearTimeout(showTimer)
-  showTimer = setTimeout(() => (shown.value = true), 30)
+  shown.value = false;
+  if (showTimer) clearTimeout(showTimer);
+  showTimer = setTimeout(() => (shown.value = true), 30);
 }
 
-onMounted(play)
-onSlideEnter(play)
+onMounted(play);
+onSlideEnter(play);
 onUnmounted(() => {
-  if (showTimer) clearTimeout(showTimer)
-})
+  if (showTimer) clearTimeout(showTimer);
+});
 </script>
 
 <template>
@@ -60,8 +60,8 @@ onUnmounted(() => {
         :animate="shown ? { opacity: 1 } : { opacity: 0 }"
         :transition="{ delay: 0.9, duration: 0.6 }"
       >
-        The evidence that saves a renewal sits scattered across thousands of
-        documents — and nobody reads them all in time.
+        The evidence that saves a renewal sits scattered across thousands of documents — and nobody
+        reads them all in time.
       </Motion>
 
       <Motion
