@@ -105,7 +105,7 @@ export async function demoHttp(
         draft: {
           ...draft,
           generatedAt: cache.generatedAt,
-          cacheProvenance: "Verified Box/Nova result retrieved from cache",
+          cacheProvenance: "Reviewed Box-derived commercial email retrieved from verified cache",
         },
       });
     }
