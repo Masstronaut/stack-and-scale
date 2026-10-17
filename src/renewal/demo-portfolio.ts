@@ -22,6 +22,12 @@ export interface DemoAccount {
   reason: string;
   components: Record<string, number>;
   snapshotHash: string;
+  publicCommercial?: {
+    currentContract: string;
+    renewalBasis: string;
+    expansion: string;
+    issue: string;
+  };
   selection?: { risks: string[]; opportunities: string[]; actions: string[]; email: string[] };
 }
 export function prepareDemoAccount(
@@ -247,7 +253,8 @@ export function demoDraft(a: DemoAccount) {
     sources: a.sources.filter((s) => ids.has(s.id)),
     claims: blocks.map((b) => ({ text: b.text, sourceIds: b.sourceIds })),
     verification: "verified-cached",
+    ...(a.publicCommercial ? { publicCommercial: a.publicCommercial } : {}),
     notice:
-      "Verified Box snapshot · live Nova block selection · deterministic source-backed wording. Fictional scenario; preview only. Billing, missing commercial terms and uncommitted roadmap scope are not invented.",
+      "Verified Box snapshots · reviewed source-backed wording, served from cache. Fictional scenario; preview only. Current fees are not a new renewal quote; proposals are not accepted purchases. No new model call or email send.",
   };
 }

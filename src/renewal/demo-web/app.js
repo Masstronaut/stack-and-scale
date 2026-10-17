@@ -30,6 +30,22 @@ async function generate(account) {
     if (current !== generation) return;
     $("email-subject").textContent = draft.email.subject;
     $("email-body").textContent = draft.email.body;
+    $("commercial-summary").replaceChildren();
+    if (draft.publicCommercial) {
+      const title = document.createElement("strong");
+      title.textContent = "Fictional demo commercial facts · not a renewal quote";
+      $("commercial-summary").append(title);
+      for (const [key, label] of Object.entries({
+        currentContract: "Current contract",
+        renewalBasis: "Renewal basis",
+        expansion: "Proposed expansion",
+        issue: "Commercial discussion",
+      })) {
+        const p = document.createElement("p");
+        p.textContent = `${label}: ${draft.publicCommercial[key]}`;
+        $("commercial-summary").append(p);
+      }
+    }
     $("draft-status").textContent = "Verified cached preview · no new AI charge";
     $("sources").replaceChildren();
     for (const s of draft.sources) {
