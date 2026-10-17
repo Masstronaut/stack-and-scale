@@ -22,6 +22,19 @@ export const resolveLlmProvider = (): LlmProvider => {
   return { kind: "bedrock", model: process.env.LLM_MODEL ?? "us.amazon.nova-lite-v1:0" };
 };
 
+/**
+ * Hard cap on prompt size: multi-document prompts (contract + related docs)
+ * overflow the model's input context. ~4 chars/token, so 120k chars is a
+ * conservative ~30k tokens. Env-overridable.
+ */
+export const maxInputChars = (): number => Number(process.env.LLM_MAX_INPUT_CHARS ?? 120_000);
+
+export const truncatePromptInput = (prompt: string): string => {
+  const max = maxInputChars();
+  if (prompt.length <= max) return prompt;
+  return `${prompt.slice(0, max)}\n\n[...truncated ${prompt.length - max} chars to fit model input limits]`;
+};
+
 const bedrockCompletion = async (prompt: string, model: string): Promise<string> => {
   const { BedrockRuntimeClient, ConverseCommand } = await import("@aws-sdk/client-bedrock-runtime");
   const client = new BedrockRuntimeClient({
@@ -66,9 +79,10 @@ const openaiCompletion = async (prompt: string, model: string): Promise<string> 
 
 const completion = async (prompt: string): Promise<string> => {
   const provider = resolveLlmProvider();
+  const bounded = truncatePromptInput(prompt);
   return provider.kind === "bedrock"
-    ? bedrockCompletion(prompt, provider.model)
-    : openaiCompletion(prompt, provider.model);
+    ? bedrockCompletion(bounded, provider.model)
+    : openaiCompletion(bounded, provider.model);
 };
 
 export const LlmServiceLive: LlmServiceShape = {
