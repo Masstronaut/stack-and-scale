@@ -8,10 +8,21 @@ Parameters:
     Type: String
     Default: Masstronaut
     Description: GitHub organization or user that owns the repository.
+  GithubOrgId:
+    Type: String
+    Default: "9017393"
+    Description: >
+      Numeric GitHub ID of the org/user. OIDC subjects include IDs
+      (repo:<owner>@<id>/<repo>@<id>:...) since GitHub's 2026 subject
+      format migration.
   GithubRepo:
     Type: String
     Default: stack-and-scale
     Description: Repository name allowed to assume the deploy role.
+  GithubRepoId:
+    Type: String
+    Default: "1422689195"
+    Description: Numeric GitHub ID of the repository.
   GithubOidcProviderArn:
     Type: String
     Default: ""
@@ -49,6 +60,10 @@ Resources:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
               StringLike:
                 token.actions.githubusercontent.com:sub:
+                  # GitHub's current subject format includes owner/repo IDs
+                  - !Sub repo:${GithubOrg}@${GithubOrgId}/${GithubRepo}@${GithubRepoId}:ref:refs/heads/main
+                  - !Sub repo:${GithubOrg}@${GithubOrgId}/${GithubRepo}@${GithubRepoId}:environment:production
+                  # Legacy format (pre-migration), kept for resilience
                   - !Sub repo:${GithubOrg}/${GithubRepo}:ref:refs/heads/main
                   - !Sub repo:${GithubOrg}/${GithubRepo}:environment:production
       ManagedPolicyArns:
