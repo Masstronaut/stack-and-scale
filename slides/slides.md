@@ -4,11 +4,6 @@ colorSchema: dark
 fonts: false
 transition: slide-left
 title: "The Renewer — pipeline tour"
----
-
-# Cover
-
----
 layout: cover
 class: renewer-cover
 ---
@@ -70,80 +65,66 @@ class: renewer-cover
   <span>DLQ per stage</span>
 </div>
 
-# The problem
-
----
-layout: full
-class: problem-slide
 ---
 
-<div class="problem-eyebrow"
-  v-motion
-  :initial="{ opacity: 0, y: -8 }"
-  :enter="{ opacity: 1, y: 0, transition: { delay: 0.1, duration: 0.45 } }"
->
-  The problem
+<div class="problem-slide">
+  <div
+    class="problem-eyebrow"
+    v-motion
+    :initial="{ opacity: 0, y: -8 }"
+    :enter="{ opacity: 1, y: 0, transition: { delay: 0.1, duration: 0.45 } }"
+  >
+    The problem
+  </div>
+
+  <div class="problem-stack">
+    <p
+      class="line-1"
+      v-motion
+      :initial="{ opacity: 0, y: 24 }"
+      :enter="{ opacity: 1, y: 0, transition: { delay: 0.35, duration: 0.55 } }"
+    >
+      Contract expirations can cost <b>millions</b>.
+    </p>
+
+    <p
+      class="line-2"
+      v-motion
+      :initial="{ opacity: 0, y: 22 }"
+      :enter="{ opacity: 1, y: 0, transition: { delay: 0.6, duration: 0.55 } }"
+    >
+      Churn is <b>expensive</b>.
+    </p>
+
+    <p
+      class="line-3"
+      v-motion
+      :initial="{ opacity: 0 }"
+      :enter="{ opacity: 1, transition: { delay: 0.9, duration: 0.6 } }"
+    >
+      The evidence that saves a renewal sits scattered across thousands of
+      documents — and nobody reads them all in time.
+    </p>
+
+    <p
+      class="line-4"
+      v-motion
+      :initial="{ opacity: 0, y: 12 }"
+      :enter="{ opacity: 1, y: 0, transition: { delay: 1.2, duration: 0.55 } }"
+    >
+      The Renewer reads them first — and writes the pitch.
+    </p>
+  </div>
 </div>
 
-<div class="problem-stack">
-  <p
-    class="line-1"
-    v-motion
-    :initial="{ opacity: 0, y: 24 }"
-    :enter="{ opacity: 1, y: 0, transition: { delay: 0.35, duration: 0.55 } }"
-  >
-    Contract expirations can cost <b>millions</b>.
-  </p>
-
-  <p
-    class="line-2"
-    v-motion
-    :initial="{ opacity: 0, y: 22 }"
-    :enter="{ opacity: 1, y: 0, transition: { delay: 0.6, duration: 0.55 } }"
-  >
-    Churn is <b>expensive</b>.
-  </p>
-
-  <p
-    class="line-3"
-    v-motion
-    :initial="{ opacity: 0 }"
-    :enter="{ opacity: 1, transition: { delay: 0.9, duration: 0.6 } }"
-  >
-    The evidence that saves a renewal sits scattered across thousands of
-    documents — and nobody reads them all in time.
-  </p>
-
-  <p
-    class="line-4"
-    v-motion
-    :initial="{ opacity: 0, y: 12 }"
-    :enter="{ opacity: 1, y: 0, transition: { delay: 1.2, duration: 0.55 } }"
-  >
-    The Renewer reads them first — and writes the pitch.
-  </p>
-</div>
-
-# Docs into Box
-
----
-layout: full
 ---
 
 <DocsIntoBox />
 
-# The pipeline
-
----
-layout: full
 ---
 
 <PipelineFlow />
 
-# Powered by
-
----
-layout: full
 ---
 
 <TechGrid />

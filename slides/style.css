@@ -8,6 +8,12 @@
   -webkit-font-smoothing: antialiased;
 }
 
+/* full-bleed slides: the base layout pads by px-14 (56px), which pushed
+   the fixed 980x552 scenes off-center */
+.slidev-layout {
+  padding: 0 !important;
+}
+
 .mono {
   font-family:
     ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
@@ -51,6 +57,13 @@
 }
 
 /* ---- problem slide ---- */
+.problem-slide {
+  position: relative;
+  width: 980px;
+  height: 552px;
+  overflow: hidden;
+}
+
 .problem-slide .problem-eyebrow {
   position: absolute;
   top: 24px;

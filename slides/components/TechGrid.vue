@@ -1,31 +1,35 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
-import { Motion } from 'motion-v'
-import { onSlideEnter } from '@slidev/client'
+import { onMounted, onUnmounted, ref } from "vue";
+import { Motion } from "motion-v";
+import { onSlideEnter } from "@slidev/client";
 
 const techs = [
-  { name: 'Box Storage', color: '#3b82f6', desc: 'Customer document library — the source of truth.' },
-  { name: 'Box AI', color: '#38bdf8', desc: 'Document intelligence across the library.' },
-  { name: 'AWS Bedrock', color: '#a78bfa', desc: 'Nova models draft grounded notes and decks.' },
-  { name: 'Amazon SQS', color: '#fbbf24', desc: 'One queue per worker · DLQ after 3 attempts.' },
-  { name: 'Amazon SES', color: '#34d399', desc: 'Renewal emails delivered to the AE.' },
-  { name: 'Kiro coding agent', color: '#f472b6', desc: 'Agentic, spec-driven development.' },
-]
+  {
+    name: "Box Storage",
+    color: "#3b82f6",
+    desc: "Customer document library — the source of truth.",
+  },
+  { name: "Box AI", color: "#38bdf8", desc: "Document intelligence across the library." },
+  { name: "AWS Bedrock", color: "#a78bfa", desc: "Nova models draft grounded notes and decks." },
+  { name: "Amazon SQS", color: "#fbbf24", desc: "One queue per worker · DLQ after 3 attempts." },
+  { name: "Amazon SES", color: "#34d399", desc: "Renewal emails delivered to the AE." },
+  { name: "Kiro coding agent", color: "#f472b6", desc: "Agentic, spec-driven development." },
+];
 
-const shown = ref(false)
-let showTimer: ReturnType<typeof setTimeout> | undefined
+const shown = ref(false);
+let showTimer: ReturnType<typeof setTimeout> | undefined;
 
 function play() {
-  shown.value = false
-  if (showTimer) clearTimeout(showTimer)
-  showTimer = setTimeout(() => (shown.value = true), 30)
+  shown.value = false;
+  if (showTimer) clearTimeout(showTimer);
+  showTimer = setTimeout(() => (shown.value = true), 30);
 }
 
-onMounted(play)
-onSlideEnter(play)
+onMounted(play);
+onSlideEnter(play);
 onUnmounted(() => {
-  if (showTimer) clearTimeout(showTimer)
-})
+  if (showTimer) clearTimeout(showTimer);
+});
 </script>
 
 <template>
@@ -52,7 +56,10 @@ onUnmounted(() => {
         :transition="{ delay: 0.15 + i * 0.09, type: 'spring', stiffness: 230, damping: 20 }"
       >
         <div class="row">
-          <span class="dot" :style="{ background: tech.color, boxShadow: `0 0 10px ${tech.color}88` }" />
+          <span
+            class="dot"
+            :style="{ background: tech.color, boxShadow: `0 0 10px ${tech.color}88` }"
+          />
           <span class="name">{{ tech.name }}</span>
         </div>
         <p class="desc">{{ tech.desc }}</p>

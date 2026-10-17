@@ -107,7 +107,7 @@ const smallDocs = [
   { x: 50, y: 128, rot: 3, color: "#a78bfa" },
   { x: 128, y: 64, rot: -5, color: "#34d399" },
 ];
-const CONTRACT = { from: { x: 84, y: 96 }, to: { x: 66, y: 24 } };
+const CONTRACT = { from: { x: 84, y: 100 }, to: { x: 68, y: 36 } };
 
 // node-4 deck fan + sparkles
 const deckCards = [
@@ -191,7 +191,7 @@ function flightX(s: number, t: number) {
         >
           <span class="status-text">{{ STATUS[stage] }}</span>
         </Motion>
-        <span class="step mono">{{ stage === 0 ? 'auto' : stage + '/4' }}</span>
+        <span class="step mono">{{ stage === 0 ? "auto" : stage + "/4" }}</span>
       </Motion>
     </div>
 
@@ -339,7 +339,7 @@ function flightX(s: number, t: number) {
                 </div>
                 <Motion
                   class="abs glowspot"
-                  :style="{ left: '36px', top: '4px' }"
+                  :style="{ left: '36px', top: '16px' }"
                   :initial="{ opacity: 0 }"
                   :animate="{ opacity: on(1) ? 0.85 : 0 }"
                   :transition="{ delay: on(1) ? 0.45 : 0, duration: 0.45 }"
@@ -364,7 +364,7 @@ function flightX(s: number, t: number) {
                 </Motion>
                 <Motion
                   class="stamp"
-                  :style="{ left: '50px', top: '16px' }"
+                  :style="{ left: '52px', top: '28px' }"
                   :initial="{ opacity: 0, scale: 2.4, rotate: -2 }"
                   :animate="
                     on(1)
