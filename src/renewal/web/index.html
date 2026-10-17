@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#FFFFFF" />
+    <title>The Renewer · Stack & Scale</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23121214'/%3E%3Ctext x='5' y='25' font-size='28' fill='%23F97316'%3E%E2%86%BB%3C/text%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="masthead">
+      <a class="brand" href="/" aria-label="The Renewer home"
+        ><span class="brandmark" aria-hidden="true">↻</span> The Renewer</a
+      >
+      <span class="wordmark">STACK & SCALE</span>
+    </header>
+    <main>
+      <div class="heading-row">
+        <h1>Renewal priorities, ready for review.</h1>
+        <button
+          id="refresh"
+          class="icon-button"
+          title="Refresh portfolio analysis"
+          aria-label="Refresh portfolio analysis"
+          hidden
+        >
+          ↻
+        </button>
+      </div>
+      <p class="subtitle">
+        Identify the accounts that need attention and prepare an AE email from source-backed
+        customer records.
+      </p>
+      <div class="actions">
+        <button id="analyze" class="primary">
+          Find renewal priorities <span aria-hidden="true">↗</span>
+        </button>
+        <button id="fixture" class="text-button">Preview with sample data</button>
+      </div>
+      <div id="status" class="status" role="status" aria-live="polite"></div>
+      <h2 class="list-label">Priority accounts</h2>
+      <section id="opportunities" aria-label="Top renewal opportunities"></section>
+      <div id="empty" class="empty" hidden>
+        <h2>No priorities loaded yet.</h2>
+        <p id="empty-message">
+          Run a portfolio review to see the five accounts that need attention, or preview the
+          interface with clearly labeled sample data.
+        </p>
+      </div>
+      <p class="privacy">
+        <span aria-hidden="true">◇</span> Private to your account team. You review every email
+        before it’s sent.
+      </p>
+    </main>
+    <footer><span>THE RENEWER</span><span>Powered by Box + Amazon Bedrock</span></footer>
+    <dialog id="preview" aria-labelledby="preview-title">
+      <div class="dialog-top">
+        <span class="eyebrow">RENEWAL EMAIL</span
+        ><button id="close-preview" class="icon-button" aria-label="Close email preview">×</button>
+      </div>
+      <h2 id="preview-title">Preparing your email</h2>
+      <p id="draft-status" class="draft-status" role="status" aria-live="polite"></p>
+      <div id="draft-content" hidden>
+        <div class="email-meta">
+          <span>TO</span><strong>Approved internal test recipient only</strong>
+        </div>
+        <div class="email-meta subject">
+          <span>SUBJECT</span><strong id="email-subject"></strong>
+        </div>
+        <div id="email-body" class="email-body"></div>
+        <details>
+          <summary>Review supporting evidence <span aria-hidden="true">↗</span></summary>
+          <div id="sources"></div>
+          <p class="verification-note" id="verification-note"></p>
+        </details>
+      </div>
+      <div class="dialog-bottom">
+        <p id="send-note">Nothing is sent automatically.</p>
+        <button id="send" class="primary" disabled>
+          Send Email <span aria-hidden="true">↗</span>
+        </button>
+      </div>
+    </dialog>
+    <dialog id="approval" class="approval" aria-labelledby="approval-title">
+      <div class="dialog-top">
+        <span class="eyebrow">YOUR APPROVAL</span
+        ><button id="close-approval" class="icon-button" aria-label="Close send approval">×</button>
+      </div>
+      <h2 id="approval-title">Review before sending.</h2>
+      <p id="approval-message">
+        Delivery is disabled in this local review. No recipient is configured and no email will be
+        sent.
+      </p>
+      <button id="confirm-send" class="primary" disabled>Approve & Send</button>
+    </dialog>
+  </body>
+</html>
