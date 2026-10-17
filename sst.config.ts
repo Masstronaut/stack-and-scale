@@ -69,6 +69,19 @@ export default $config({
     // /artifacts routes read/presign from the same bucket.
     const boxRootFolderId = process.env.BOX_ROOT_FOLDER_ID ?? "0";
     const boxOutputFolderId = process.env.BOX_OUTPUT_FOLDER_ID ?? boxRootFolderId;
+
+    // LLM: Bedrock Nova by default (function role credentials, no separate
+    // key); LLM_PROVIDER=openai switches to an OpenAI-compatible endpoint.
+    const llmEnvironment = {
+      LLM_PROVIDER: process.env.LLM_PROVIDER ?? "bedrock",
+      LLM_MODEL: process.env.LLM_MODEL ?? "us.amazon.nova-lite-v1:0",
+    };
+    const llmPermissions = [
+      {
+        actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+        resources: ["*"],
+      },
+    ];
     const artifacts = new sst.aws.Bucket("Artifacts");
     interface WorkerDef {
       readonly queue: string;
@@ -142,7 +155,8 @@ export default $config({
         {
           handler: def.handler,
           timeout: "300 seconds",
-          environment: def.environment,
+          environment: { ...llmEnvironment, ...def.environment },
+          permissions: llmPermissions,
           link: [
             boxClientId,
             boxClientSecret,
