@@ -16,7 +16,8 @@ export interface ManifestCustomer {
 
 export interface ManifestDocument {
   readonly document_id: string;
-  readonly customer_id: string;
+  /** null for the customer-less shared Product Knowledge files. */
+  readonly customer_id: string | null;
   readonly document_type: string;
   readonly provenance: string;
   readonly filename: string;
@@ -48,3 +49,30 @@ export const selectAgreementFiles = (boxManifest: BoxManifest): readonly Manifes
       document.document_type === "AGREEMENT" && !originalFileIds.has(document.box_file_id),
   );
 };
+
+/**
+ * Exact box_file_id lookup for worker #3 contract resolution. Returns
+ * undefined for unknown or ambiguous ids so callers can fail instead of
+ * guessing.
+ */
+export const findDocumentByFileId = (
+  boxManifest: BoxManifest,
+  boxFileId: string,
+): ManifestDocument | undefined => {
+  const matches = boxManifest.documents.filter((document) => document.box_file_id === boxFileId);
+  return matches.length === 1 ? matches[0] : undefined;
+};
+
+/** All of one customer's manifest documents, in manifest order. */
+export const selectCustomerFiles = (
+  boxManifest: BoxManifest,
+  customerId: string,
+): readonly ManifestDocument[] =>
+  boxManifest.documents.filter((document) => document.customer_id === customerId);
+
+/**
+ * The customer-less shared Product Knowledge references (catalog, release
+ * notes, roadmap, pricing tiers), in manifest order.
+ */
+export const selectSharedKnowledgeFiles = (boxManifest: BoxManifest): readonly ManifestDocument[] =>
+  boxManifest.documents.filter((document) => document.document_type === "PRODUCT_KNOWLEDGE");

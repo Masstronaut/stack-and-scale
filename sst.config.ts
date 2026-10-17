@@ -56,7 +56,8 @@ export default $config({
     //
     // The contract scanner is the only stage allowed to write box metadata
     // (BOX_WRITE_ENABLED); its scan root is configurable per stage and
-    // defaults to the box root folder ("0").
+    // defaults to the box root folder ("0"). relatedDocuments gets the same
+    // root for read-only contract text reads and never writes box.
     const boxRootFolderId = process.env.BOX_ROOT_FOLDER_ID ?? "0";
     interface WorkerDef {
       readonly queue: string;
@@ -78,6 +79,9 @@ export default $config({
         queue: "RelatedDocumentsQueue",
         dlq: "RelatedDocumentsDLQ",
         handler: "src/workers/relatedDocuments.handler",
+        environment: {
+          BOX_ROOT_FOLDER_ID: boxRootFolderId,
+        },
       },
       {
         queue: "SalesNotesQueue",

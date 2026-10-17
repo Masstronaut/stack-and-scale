@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { SQSEvent, SQSHandler } from "aws-lambda";
 import { Effect } from "effect";
-import type { PipelineJob } from "../src/jobs/messages.ts";
+import type { PipelineJob, RelatedDocumentsJob } from "../src/jobs/messages.ts";
 import { BoxService, type BoxServiceShape, type FileRef } from "../src/services/box.ts";
-import { BoxError } from "../src/services/errors.ts";
+import { BoxError, LlmError } from "../src/services/errors.ts";
 import { JobQueueService, type JobQueueServiceShape } from "../src/services/jobs.ts";
-import { loadManifest, selectAgreementFiles, type BoxManifest } from "../src/lib/manifest.ts";
+import {
+  findDocumentByFileId,
+  loadManifest,
+  selectAgreementFiles,
+  selectSharedKnowledgeFiles,
+  type BoxManifest,
+  type ManifestDocument,
+} from "../src/lib/manifest.ts";
 import { LlmService, type LlmServiceShape } from "../src/services/llm.ts";
 import * as contractScanner from "../src/workers/contractScanner.ts";
 import * as relatedDocuments from "../src/workers/relatedDocuments.ts";
@@ -193,6 +200,114 @@ const fixtureManifest: BoxManifest = {
   ],
 };
 
+const makeDoc = (
+  documentId: string,
+  customerId: string | null,
+  documentType: string,
+  boxFileId: string,
+  provenance = "synthetic",
+): ManifestDocument => ({
+  document_id: documentId,
+  customer_id: customerId,
+  document_type: documentType,
+  provenance,
+  filename: `${documentId}.pdf`,
+  box_folder_id: "f1",
+  box_file_id: boxFileId,
+});
+
+const relatedManifest: BoxManifest = {
+  customers: [
+    {
+      customer_id: "REN-C1",
+      customer_name: "Acme",
+      box_folder_id: "f1",
+      source_contract_id: "CUAD-1",
+      source_box_file_id: "src-1",
+      document_types: [
+        "PROFILE",
+        "AGREEMENT",
+        "EMAILS",
+        "REQUESTS",
+        "HISTORY",
+        "USAGECSV",
+        "USAGE",
+        "OBLIGATIONS",
+      ],
+    },
+    {
+      customer_id: "REN-C2",
+      customer_name: "Beta",
+      box_folder_id: "f2",
+      source_contract_id: "CUAD-2",
+      source_box_file_id: "src-2",
+      document_types: ["AGREEMENT", "PROFILE"],
+    },
+  ],
+  documents: [
+    makeDoc("D1-PROFILE", "REN-C1", "PROFILE", "prof-1"),
+    makeDoc("D1-AGREEMENT", "REN-C1", "AGREEMENT", "agr-1"),
+    makeDoc("D1-EMAILS", "REN-C1", "EMAILS", "mail-1"),
+    makeDoc("D1-REQUESTS", "REN-C1", "REQUESTS", "req-1"),
+    makeDoc("D1-HISTORY", "REN-C1", "HISTORY", "hist-1"),
+    makeDoc("D1-USAGECSV", "REN-C1", "USAGECSV", "ucsv-1"),
+    makeDoc("D1-USAGE", "REN-C1", "USAGE", "usage-1"),
+    makeDoc("D1-OBLIGATIONS", "REN-C1", "OBLIGATIONS", "oblig-1"),
+    makeDoc("D1-ORIGINAL", "REN-C1", "CUAD_ORIGINAL", "src-1", "original_cuad"),
+    makeDoc("D2-AGREEMENT", "REN-C2", "AGREEMENT", "agr-2"),
+    makeDoc("D2-PROFILE", "REN-C2", "PROFILE", "prof-2"),
+    makeDoc("SHARED-CATALOG", null, "PRODUCT_KNOWLEDGE", "cat-1"),
+    makeDoc("SHARED-RELEASES", null, "PRODUCT_KNOWLEDGE", "rel-1"),
+    makeDoc("SHARED-ROADMAP", null, "PRODUCT_KNOWLEDGE", "road-1"),
+    makeDoc("SHARED-PRICING", null, "PRODUCT_KNOWLEDGE", "price-1"),
+  ],
+};
+
+const RELATED_BASELINE_IDS = [
+  "prof-1",
+  "mail-1",
+  "req-1",
+  "hist-1",
+  "ucsv-1",
+  "usage-1",
+  "oblig-1",
+];
+
+interface RelatedLlmFakeOptions {
+  readonly reply?: string;
+  readonly fail?: boolean;
+}
+
+const makeRelatedLlmFake = (options: RelatedLlmFakeOptions = {}) => {
+  const calls: string[] = [];
+  const llm: LlmServiceShape = {
+    complete: (prompt) => {
+      calls.push(prompt);
+      return options.fail === true
+        ? Effect.fail(new LlmError({ cause: new Error("llm unavailable") }))
+        : Effect.succeed(options.reply ?? "none");
+    },
+  };
+  return { llm, calls };
+};
+
+const runRelated = (
+  job: RelatedDocumentsJob,
+  box: BoxServiceShape,
+  llm: LlmServiceShape,
+  queues: JobQueueServiceShape,
+  boxManifest: BoxManifest = relatedManifest,
+) =>
+  Effect.runPromise(
+    relatedDocuments
+      .processJob(job, boxManifest)
+      .pipe(
+        Effect.provideService(BoxService, box),
+        Effect.provideService(LlmService, llm),
+        Effect.provideService(JobQueueService, queues),
+      ),
+  );
+
 describe("manifest selection", () => {
   it("selects only synthetic agreements, never CUAD originals", () => {
     const selected = selectAgreementFiles(fixtureManifest);
@@ -202,6 +317,25 @@ describe("manifest selection", () => {
   it("the committed manifest has one agreement per account", () => {
     expect(loadManifest().customers).toHaveLength(24);
     expect(selectAgreementFiles(loadManifest())).toHaveLength(24);
+  });
+
+  it("finds documents by exact box file id, rejecting unknown or ambiguous ids", () => {
+    expect(findDocumentByFileId(fixtureManifest, "agr-1")?.document_id).toBe("D1-AGREEMENT");
+    expect(findDocumentByFileId(fixtureManifest, "nope")).toBeUndefined();
+    expect(
+      findDocumentByFileId(
+        {
+          customers: [],
+          documents: [fixtureManifest.documents[0]!, fixtureManifest.documents[0]!],
+        },
+        "agr-1",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("selects the customer-less shared product knowledge files", () => {
+    const shared = selectSharedKnowledgeFiles(relatedManifest);
+    expect(shared.map((doc) => doc.box_file_id)).toEqual(["cat-1", "rel-1", "road-1", "price-1"]);
   });
 });
 
@@ -380,8 +514,112 @@ describe("workers", () => {
     });
   });
 
-  it("related documents completes a job (#3)", async () => {
-    await runOk(relatedDocuments.handler, JSON.stringify({ contractFileId: "contract-1" }));
+  it("resolves a contract to its customer's seven baseline files with reasons (#3)", async () => {
+    const { box } = makeBoxFake({ files: [] });
+    const { llm } = makeRelatedLlmFake({ reply: "none" });
+    const { queues, enqueued } = makeQueueFake();
+
+    const result = await runRelated({ contractFileId: "agr-1" }, box, llm, queues);
+
+    expect(result.customerId).toBe("REN-C1");
+    expect(result.baseline.map((entry) => entry.fileId)).toEqual(RELATED_BASELINE_IDS);
+    expect(result.baseline.map((entry) => entry.reason)).toEqual([
+      "PROFILE: customer identity & context",
+      "EMAILS: customer correspondence & asks",
+      "REQUESTS: feature request status",
+      "HISTORY: account & negotiation history",
+      "USAGECSV: raw product usage observations",
+      "USAGE: product usage report",
+      "OBLIGATIONS: delivery & service obligations",
+    ]);
+    expect(result.relevantDocumentIds).toEqual(RELATED_BASELINE_IDS);
+    expect(enqueued).toEqual([
+      { contractFileId: "agr-1", relevantDocumentIds: RELATED_BASELINE_IDS },
+    ]);
+  });
+
+  it("adds only LLM-selected shared product knowledge ids (#3)", async () => {
+    const { box } = makeBoxFake({ files: [] });
+    const { llm, calls } = makeRelatedLlmFake({ reply: '["cat-1", "road-1", "not-in-manifest"]' });
+    const { queues, enqueued } = makeQueueFake();
+
+    const result = await runRelated({ contractFileId: "agr-1" }, box, llm, queues);
+
+    expect(result.sharedDocumentIds).toEqual(["cat-1", "road-1"]);
+    expect(result.relevantDocumentIds).toEqual([...RELATED_BASELINE_IDS, "cat-1", "road-1"]);
+    expect(enqueued).toEqual([
+      {
+        contractFileId: "agr-1",
+        relevantDocumentIds: [...RELATED_BASELINE_IDS, "cat-1", "road-1"],
+      },
+    ]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("Acme"); // customer context
+    expect(calls[0]).toContain("text of agr-1"); // contract text read via box
+  });
+
+  it("completes with the baseline-only set when the LLM fails (#3)", async () => {
+    const { box } = makeBoxFake({ files: [] });
+    const { llm } = makeRelatedLlmFake({ fail: true });
+    const { queues, enqueued } = makeQueueFake();
+
+    const result = await runRelated({ contractFileId: "agr-1" }, box, llm, queues);
+
+    expect(result.relevantDocumentIds).toEqual(RELATED_BASELINE_IDS);
+    expect(result.sharedDocumentIds).toEqual([]);
+    expect(enqueued).toEqual([
+      { contractFileId: "agr-1", relevantDocumentIds: RELATED_BASELINE_IDS },
+    ]);
+  });
+
+  it("fails the job for unresolvable contractFileIds (#3)", async () => {
+    const { box } = makeBoxFake({ files: [] });
+    const { llm } = makeRelatedLlmFake();
+    const { queues, enqueued } = makeQueueFake();
+
+    await expect(
+      runRelated({ contractFileId: "unknown-file" }, box, llm, queues),
+    ).rejects.toMatchObject({ _tag: "ContractResolutionError", contractFileId: "unknown-file" });
+    // shared docs are customer-less and cannot be resolved as contracts
+    await expect(runRelated({ contractFileId: "cat-1" }, box, llm, queues)).rejects.toMatchObject({
+      _tag: "ContractResolutionError",
+    });
+    // ambiguous ids (duplicate box file entries) are rejected too
+    const ambiguous: BoxManifest = {
+      customers: [],
+      documents: [
+        makeDoc("A", "REN-C1", "PROFILE", "dup-1"),
+        makeDoc("B", "REN-C2", "PROFILE", "dup-1"),
+      ],
+    };
+    await expect(
+      runRelated({ contractFileId: "dup-1" }, box, llm, queues, ambiguous),
+    ).rejects.toMatchObject({ _tag: "ContractResolutionError" });
+    expect(enqueued).toEqual([]);
+
+    // through the live handler the failure becomes a batch item failure
+    const result = await run(
+      relatedDocuments.handler,
+      JSON.stringify({ contractFileId: "unknown-file" }),
+    );
+    expect(result.batchItemFailures).toEqual([{ itemIdentifier: "msg-0" }]);
+  });
+
+  it("resolves a CUAD original to its mapped customer with provenance retained (#3)", async () => {
+    const { box } = makeBoxFake({ files: [] });
+    const { llm } = makeRelatedLlmFake({ reply: "none" });
+    const { queues, enqueued } = makeQueueFake();
+
+    const result = await runRelated({ contractFileId: "src-1" }, box, llm, queues);
+
+    expect(result.customerId).toBe("REN-C1");
+    expect(result.contractProvenance).toBe("original_cuad");
+    expect(result.baseline.map((entry) => entry.fileId)).toEqual(RELATED_BASELINE_IDS);
+    expect(result.relevantDocumentIds).not.toContain("agr-1");
+    expect(result.relevantDocumentIds).not.toContain("src-1");
+    expect(enqueued).toEqual([
+      { contractFileId: "src-1", relevantDocumentIds: RELATED_BASELINE_IDS },
+    ]);
   });
 
   it("sales notes completes a job (#4)", async () => {
