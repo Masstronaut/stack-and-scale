@@ -1,5 +1,11 @@
 # stack-and-scale
 
+## The Renewer dataset
+
+The approved Box library and teammate retrieval/security guidance are indexed in
+[docs/dataset/README.md](docs/dataset/README.md). The handoff contains only sanitized
+document metadata and documentation, not customer document contents or credentials.
+
 Base tech stack ([#1](https://github.com/Masstronaut/stack-and-scale/issues/1)) for a job-processing service on AWS:
 
 - **SST (v4)** defines and deploys all AWS resources in TypeScript (`sst.config.ts`)
