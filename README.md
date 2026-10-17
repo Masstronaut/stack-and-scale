@@ -12,6 +12,25 @@ and the [updated implementation plan](docs/COMMAND-CENTER-PLAN.md).
 
 Run dependency-free tests with `node --test scripts/test-renewer.ts`.
 
+## Pipeline slides (Slidev)
+
+An animated Slidev deck lives in [slides/](slides/): documents landing in Box,
+the four SQS workers from contract scan to sales deck (auto-plays and loops),
+plus problem and tech-stack slides.
+
+```bash
+cd slides
+npm install        # first time only
+npm run dev        # serves the deck; open the printed URL (default :3030)
+```
+
+- `→` / `←` moves between slides; the pipeline slide animates on its own and
+  replays every time you enter it.
+- To expose the dev server on the network (and enable remote control):
+  `npm run dev -- --remote --port 4321`.
+- `npm run build` emits a static SPA in `slides/dist/` — host it anywhere
+  (S3 + CloudFront, GitHub Pages, `npx serve dist`).
+
 ## The Renewer dataset
 
 The approved Box library and teammate retrieval/security guidance are indexed in
